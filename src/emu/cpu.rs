@@ -26,6 +26,7 @@ pub struct _65816 {
 }
 
 impl _65816 {
+    // interrupts 
 
     pub fn irq(&mut self) { // interrupt request
         self.b = false;
@@ -40,6 +41,8 @@ impl _65816 {
         self.i = true;
         self.pc = 0xfffa;
     }
+
+    
 } 
 
 
