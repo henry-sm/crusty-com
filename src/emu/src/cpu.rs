@@ -1,3 +1,4 @@
+use crate::bus::Bus;
 
 pub struct _65816 {
     // Registers 
@@ -23,6 +24,12 @@ pub struct _65816 {
     pub x : bool , // Index Register Width
     pub z : bool , // Zero
 
+    // Clock
+    pub cycles : u64 , // Number of cycles
+
+    //misc
+    pub opcode : u8 , // opcode
+    pub bus : Bus , // bus
 }
 
 impl _65816 {
@@ -42,11 +49,29 @@ impl _65816 {
         self.pc = 0xfffa;
     }
 
-    // addressing modes 
+    
 
-    pub fn immediate(&mut self) {
-        
-    }
 } 
 
+impl _65816 {
+    // match the opcode with the instructions
+    // god help me there are 256 opcodes
 
+    pub fn opcode(&mut self) { // opcode
+        match self.opcode {
+
+                0x00 => {
+                    // brk
+                    self.pc = self.pc + 2;
+                    if self.e{
+                        self.pc = self.pc + 2;
+                    } else {
+                        self.pc = self.pc + 1;
+                    }
+                    self.cycles = self.cycles + 7;
+                    self.b = true;
+                }
+        }
+    }
+
+}
