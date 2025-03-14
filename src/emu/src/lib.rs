@@ -11,7 +11,7 @@ pub fn run() {
     // ... your emulator initialization and execution logic ...
     // Example: create a bus and cpu.
     let mut my_bus = bus::Bus::new();
-    let mut my_cpu = cpu::Cpu::new();
+    let mut my_cpu = cpu::_65816::new();
 
     // Example: run the cpu for a certain number of cycles.
     for _i in 0..10 {

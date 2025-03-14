@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, State, Window};
-use snes; // Import the snes crate.
+
 
 #[derive(Default)]
 struct AppState {

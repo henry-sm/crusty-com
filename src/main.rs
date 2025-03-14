@@ -1,9 +1,8 @@
 // crusty-com/src/main.rs
 
 use std::env;
-pub mod emu;
-pub mod gui;
-
+use emu::run as emu_run;
+use gui::run as gui_run;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -12,11 +11,11 @@ fn main() {
         match args[1].as_str() {
             "--emu" => {
                 println!("Running emulator...");
-                emu::run(); // Assuming run() is a function in emu/src/lib.rs
+                emu_run(); // Call the run function from the emu crate
             }
             "--gui" => {
                 println!("Launching GUI...");
-                gui::run(); // Assuming run() is a function in gui/src/main.rs.
+                gui_run(); // Call the run function from the gui crate
             }
             "--help" | "-h" => {
                 println!("Usage: crusty-com [--emu | --gui]");

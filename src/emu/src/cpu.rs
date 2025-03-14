@@ -3,7 +3,7 @@ pub struct _65816 {
     // Registers 
     pub a : u16 , // Accumulator 
     pub dbr : u8 , // Data Bank Register
-    pub d : u16 , // Direct Register
+    pub dr : u16 , // Direct Register
     pub k : u8 , // Program Bank Register
     pub pc : u16 , // Program Counter
     pub p : u8 , // status register
@@ -42,7 +42,11 @@ impl _65816 {
         self.pc = 0xfffa;
     }
 
-    
+    // addressing modes 
+
+    pub fn immediate(&mut self) {
+        
+    }
 } 
 
 

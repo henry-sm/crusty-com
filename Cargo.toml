@@ -10,3 +10,7 @@ authors = ["henry-sm"]
 [workspace]
 
 members = [ "src/emu", "src/gui"]
+
+[dependencies]
+emu = { path = "src/emu" }
+gui = { path = "src/gui" }
