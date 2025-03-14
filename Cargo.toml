@@ -9,4 +9,4 @@ authors = ["henry-sm"]
 
 [workspace]
 
-members = [ "emu", "gui"]
+members = [ "src/emu", "src/gui"]
