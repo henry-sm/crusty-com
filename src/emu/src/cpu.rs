@@ -1,4 +1,3 @@
-
 pub struct CPU {
     // Registers 
     pub a : u16 , // Accumulator 
@@ -31,6 +30,78 @@ pub struct CPU {
     ram : [u8; 131072], // 128*1024 bytes 
 }
 
+impl CPU {
+    pub fn new() -> Self {
+        CPU {
+            a: 0,
+            dbr: 0,
+            dr: 0,
+            k: 0,
+            pc: 0,
+            p: 0,
+            s: 0x1FF,  // Initialize stack pointer to top of stack
+            X: 0,
+            Y: 0,
+            b: false,
+            c: false,
+            d: false,
+            e: true,   // Start in emulation mode
+            i: true,   // Interrupts disabled on startup
+            m: true,
+            n: false,
+            v: false,
+            x: false,
+            z: false,
+            cycles: 0,
+            opcode: 0,
+            ram: [0; 131072],
+        }
+    }
+
+    // Improved memory operations
+    pub fn read_byte(&self, addr: u16) -> u8 {
+        self.ram[addr as usize]
+    }
+
+    pub fn write_byte(&mut self, addr: u16, data: u8) {
+        self.ram[addr as usize] = data;
+    }
+
+    pub fn read_word(&mut self, addr: u16) -> u16 {
+        let lo = self.read_byte(addr) as u16;
+        let hi = self.read_byte(addr.wrapping_add(1)) as u16;
+        (hi << 8) | lo
+    }
+
+    pub fn write_word(&mut self, addr: u16, data: u16) {
+        self.write_byte(addr, (data & 0xFF) as u8);
+        self.write_byte(addr.wrapping_add(1), (data >> 8) as u8);
+    }
+
+    // Flag management
+    fn update_nz_flags(&mut self, value: u16) {
+        self.n = (value & 0x8000) != 0;
+        self.z = value == 0;
+    }
+
+    // Stack operations with 16-bit support
+    pub fn push_word(&mut self, data: u16) {
+        self.push((data >> 8) as u8);
+        self.push(data as u8);
+    }
+
+    pub fn pop_word(&mut self) -> u16 {
+        let lo = self.pop() as u16;
+        let hi = self.pop() as u16;
+        (hi << 8) | lo
+    }
+
+    // Replace existing read function with:
+    pub fn read(&mut self, addr: u16) -> u16 {
+        self.read_word(addr)
+    }
+}
+
 impl CPU  {
     // interrupts 
 
@@ -60,17 +131,6 @@ impl CPU  {
         self.ram[self.s as usize]
     }
 
-
-    // mem read and write
-
-    pub fn read(&mut self, addr : u16) -> u16 {
-        let hi = self.ram[addr as usize] as u16;
-        let lo = self.ram[(addr + 1) as usize] as u16;
-        (hi << 8) | lo 
-    }
-
-    
-
 } 
 
 impl CPU {
@@ -78,7 +138,10 @@ impl CPU {
     // god help me there are 256 opcodes
 
     pub fn opcode(&mut self) { // opcode
-        match self.opcode {
+        let opcode = self.opcode;
+        let pc_before = self.pc;
+
+        match opcode {
 
                 0x00 => {
                     // brk
@@ -168,7 +231,7 @@ impl CPU {
 
                 0x07 => {
                     // ora [dp]
-                    self.a = self.a | self.read(self.ram[self.dr as usize]);
+                    self.a = self.a | self.read(self.ram[self.dr as usize] as u16);
                     self.z = self.a == 0;
                     self.n = (self.a & 0x80) != 0;
                     self.cycles += 6;
@@ -182,7 +245,32 @@ impl CPU {
                     self.pc += 1;
                 }
                 
+                0x09 => {
+                    // ora #const
+                    self.a = self.a | self.ram[self.pc as usize] as u16;
+                    self.z = self.a == 0;
+                    self.n = (self.a & 0x80) != 0;
+                    self.c = false;
+                    self.cycles += 2;
+                    self.pc += 2;
+                }
 
+                0x0A => {
+                    // ASL A (Accumulator)
+                    if self.m {
+                        // 8-bit mode
+                        self.c = (self.a & 0x80) != 0;
+                        self.a = (self.a << 1) & 0xFF;
+                    } else {
+                        // 16-bit mode
+                        self.c = (self.a & 0x8000) != 0;
+                        self.a = self.a << 1;
+                    }
+                    self.update_nz_flags(self.a);
+                    self.cycles += 2;
+                    self.pc = pc_before.wrapping_add(1);
+                }
+                
                 _ => {
                   println!( "Invalid opcode/ work in progress");
                 }
