@@ -1,6 +1,14 @@
-# crusty-com/src/gui/Cargo.toml
-
 [package]
-name = "gui"
+name = "gui-tauri"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+tauri = "2"
+emu = { path = "../emu" }
+[lib]
+path = "src-tauri/src/lib.rs"
+
+[[bin]]
+name = "gui"
+path = "src-tauri/src/main.rs"

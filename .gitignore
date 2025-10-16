@@ -2,3 +2,36 @@
 /testroms
 /tests 
 
+# Rust build artifacts
+/target/
+**/target/
+
+# Node/npm artifacts (for gui)
+/node_modules/
+**/node_modules/
+*.log
+
+# Tauri build artifacts
+/dist/
+**/dist/
+
+# IDE/editor files
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc
+*.bak
+*.tmp
+
+# By convention, ignore test ROMs if you don’t want to commit them
+/testroms/
+
+/gui/src-tauri/target/
+/gui/src-tauri/dist/
+/gui/src-tauri/node_modules/
+/gui/src-tauri/*.log

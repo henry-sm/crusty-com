@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 # Add any dependencies your SNES emulator needs here
+sdl2 = "0.35.2"

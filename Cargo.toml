@@ -9,7 +9,7 @@ authors = ["henry-sm"]
 
 [workspace]
 
-members = [ "src/emu", "src/gui"]
+members = [ "src/emu", "src/gui", "src/gui/src-tauri" ]
 
 [dependencies]
 emu = { path = "src/emu" }

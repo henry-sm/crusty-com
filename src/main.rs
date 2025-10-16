@@ -1,5 +1,3 @@
-// crusty-com/src/main.rs
-
 use std::env;
 use emu::run as emu_run;
 use gui::run as gui_run;
@@ -10,21 +8,27 @@ fn main() {
     if args.len() > 1 {
         match args[1].as_str() {
             "--emu" => {
-                println!("Running emulator...");
-                emu_run(); // Call the run function from the emu crate
+                // check for a rom file path
+                if let Some(rom_path) = args.get(2) {
+                    println!("running emulator with rom: {}", rom_path);
+                    emu_run(rom_path); // pass the path to the emu's run function
+                } else {
+                    println!("error: please provide a path to a rom file.");
+                    println!("usage: crusty-com --emu <path/to/rom>");
+                }
             }
             "--gui" => {
-                println!("Launching GUI...");
-                gui_run(); // Call the run function from the gui crate
+                println!("launching gui...");
+                gui_run();
             }
             "--help" | "-h" => {
-                println!("Usage: crusty-com [--emu | --gui]");
+                println!("usage: crusty-com --emu <path/to/rom>");
             }
             _ => {
-                println!("Invalid argument. Use --help for usage.");
+                println!("invalid argument. use --help for usage.");
             }
         }
     } else {
-        println!("Usage: crusty-com [--emu | --gui]");
+        println!("usage: crusty-com --emu <path/to/rom>");
     }
 }
