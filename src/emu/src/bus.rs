@@ -1,6 +1,6 @@
 use crate::ppu::PPU;
 use crate::apu::APU;
-use crate::cartridge::Cartridge;
+use crate::cart::Cartridge;
 
 pub struct Bus {
     ram: [u8; 131072], // 128KB WRAM
@@ -39,9 +39,7 @@ impl Bus {
             (0x7E..=0x7F, _) => self.ram[((full_addr - 0x7E0000) as usize)],
             // Cartridge ROM (LoROM Memory Map)
             (0x00..=0x3F, 0x8000..=0xFFFF) | (0x80..=0xBF, 0x8000..=0xFFFF) => {
-                // This will read from the loaded game cartridge
-                // self.cart.read(full_addr) // This would be the actual call
-                0 // Placeholder
+                self.cart.read(full_addr)
             }
             _ => {
                 // Return 0 for any unmapped memory regions

@@ -3,6 +3,7 @@ name = "emu"
 version = "0.1.0"
 edition = "2021"
 
+
 [dependencies]
 # Add any dependencies your SNES emulator needs here
-sdl2 = "0.35.2"
+minifb = "0.25"

@@ -10,13 +10,21 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "gui",
-        "width": 800,
-        "height": 600
+        "title": "Crusty SNES",
+        "width": 512,
+        "height": 480
       }
     ],
     "security": {
       "csp": null
+    }
+  },
+  "plugins": {
+    "dialog": {
+      "all": true
+    },
+    "shell": {
+      "open": true
     }
   },
   "bundle": {

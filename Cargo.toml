@@ -4,13 +4,10 @@ version = "0.1.0"
 edition = "2021"
 authors = ["henry-sm"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-
 [workspace]
-
-members = [ "src/emu", "src/gui", "src/gui/src-tauri" ]
+# Corrected members: src/gui is not a rust crate. src/gui/src-tauri is.
+members = [ "src/emu", "src/gui/src-tauri" ]
 
 [dependencies]
 emu = { path = "src/emu" }
-gui = { path = "src/gui" }
+gui_lib = { path = "src/gui/src-tauri" }

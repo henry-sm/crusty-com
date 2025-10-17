@@ -1,18 +1,31 @@
-const { invoke } = window.__TAURI__.core;
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 
-let greetInputEl;
-let greetMsgEl;
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+const imageData = ctx.createImageData(256, 224);
+const loadRomBtn = document.getElementById('loadRomBtn');
 
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsgEl.textContent = await invoke("greet", { name: greetInputEl.value });
-}
+// Listen for frame updates from the Rust backend
+listen('frame-update', (event) => {
+    const frameData = new Uint32Array(event.payload);
+    const buffer = new Uint8ClampedArray(frameData.buffer);
+    imageData.data.set(buffer);
+    ctx.putImageData(imageData, 0, 0);
+});
 
-window.addEventListener("DOMContentLoaded", () => {
-  greetInputEl = document.querySelector("#greet-input");
-  greetMsgEl = document.querySelector("#greet-msg");
-  document.querySelector("#greet-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    greet();
-  });
+// Handle the "Load ROM" button click
+loadRomBtn.addEventListener('click', async () => {
+    const rom = await open({
+        title: 'Select a SNES ROM',
+        multiple: false,
+        filters: [{ name: 'SNES ROM', extensions: ['sfc', 'smc'] }]
+    });
+
+    if (rom) {
+        // Call the 'load_rom' command in the Rust backend
+        await invoke('load_rom', { path: rom.path });
+        console.log(`ROM "${rom.path}" loaded.`);
+    }
 });
