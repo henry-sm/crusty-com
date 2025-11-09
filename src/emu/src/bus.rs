@@ -29,22 +29,53 @@ impl Bus {
                 // This is a mirror of the first 8KB of WRAM
                 self.ram[addr as usize % 0x2000]
             }
+            
             // PPU Registers (Banks 00-3F and 80-BF, addresses 2100-21FF)
+            // Note: APU registers are at 2140-217F but usually accessed through PPU region
             (0x00..=0x3F, 0x2100..=0x21FF) | (0x80..=0xBF, 0x2100..=0x21FF) => {
-                // In a real implementation, you would have a ppu.read() method
-                // For now, this is a placeholder
+                self.ppu.read_register((addr - 0x2100) as u8)
+            }
+            
+            // CPU I/O Registers (Banks 00-3F and 80-BF, addresses 4200-42FF)
+            (0x00..=0x3F, 0x4200..=0x42FF) | (0x80..=0xBF, 0x4200..=0x42FF) => {
+                // CPU I/O registers: interrupt control, NMI, etc.
+                // 4200 = NMITIMEN (NMI/Timer enable)
+                // 4201 = WRIO (Joypad/programmable I/O port)
+                // 4202-4203 = WRMPYA/B (Multiplication operands)
+                // 4204-4206 = WRDIVL/H, WRDIVB (Division operands)
+                // 4207-4209 = HTIMEL/H, VTIMEL (H/V timer settings)
+                // 420A-420B = MDMAEN, HDMAEN (DMA/HDMA enable)
+                // 420C-420F = ROI, ROLD, etc.
+                // TODO: implement I/O register reads
                 0
             }
-            // WRAM (Work RAM) Access
-            (0x7E..=0x7F, _) => self.ram[((full_addr - 0x7E0000) as usize)],
-            // Cartridge ROM (LoROM Memory Map)
+            
+            // DMA/HDMA Registers (Banks 00-3F and 80-BF, addresses 4300-437F)
+            (0x00..=0x3F, 0x4300..=0x437F) | (0x80..=0xBF, 0x4300..=0x437F) => {
+                // 8 DMA channels, each has 8 bytes of registers
+                // 4300-4307 = DMA0 registers
+                // 4308-430F = DMA1 registers
+                // ... through ...
+                // 4338-433F = DMA7 registers
+                // TODO: implement DMA system
+                0
+            }
+            
+            // WRAM (Work RAM) Access (Banks 7E-7F, all addresses)
+            (0x7E..=0x7F, _) => self.ram[(full_addr - 0x7E0000) as usize],
+            
+            // Cartridge ROM (LoROM Memory Map - Banks 00-7D, addresses 8000-FFFF)
             (0x00..=0x3F, 0x8000..=0xFFFF) | (0x80..=0xBF, 0x8000..=0xFFFF) => {
                 self.cart.read(full_addr)
             }
-            _ => {
-                // Return 0 for any unmapped memory regions
-                0
+            
+            // Cartridge ROM (HiROM Memory Map - Banks C0-FF)
+            (0xC0..=0xFF, _) => {
+                self.cart.read(full_addr)
             }
+            
+            // Unmapped memory - return 0
+            _ => 0
         }
     }
 
@@ -57,16 +88,101 @@ impl Bus {
             (0x00..=0x3F, 0x0000..=0x1FFF) | (0x80..=0xBF, 0x0000..=0x1FFF) => {
                 self.ram[addr as usize % 0x2000] = data;
             }
+            
             // PPU Registers (Banks 00-3F and 80-BF, addresses 2100-21FF)
             (0x00..=0x3F, 0x2100..=0x21FF) | (0x80..=0xBF, 0x2100..=0x21FF) => {
-                // self.ppu.write(addr, data); // Future implementation
+                self.ppu.write_register((addr - 0x2100) as u8, data);
             }
-             // WRAM (Work RAM) Access
+            
+            // CPU I/O Registers (Banks 00-3F and 80-BF, addresses 4200-42FF)
+            (0x00..=0x3F, 0x4200..=0x42FF) | (0x80..=0xBF, 0x4200..=0x42FF) => {
+                // CPU I/O registers write handling
+                match addr {
+                    0x4200 => {
+                        // NMITIMEN - NMI/Timer enable
+                        // Bit 7: NMI enable
+                        // Bit 4: H-timer enable
+                        // Bit 3: V-timer enable
+                        // Bits 0-1: Timer frequency
+                        // TODO: implement timer control
+                    }
+                    0x4201 => {
+                        // WRIO - Joypad output port / programmable I/O port
+                        // TODO: implement
+                    }
+                    0x4202..=0x4203 => {
+                        // WRMPYA/B - Multiplication operands
+                        // TODO: implement multiplication
+                    }
+                    0x4204..=0x4206 => {
+                        // WRDIVL/H, WRDIVB - Division operands
+                        // TODO: implement division
+                    }
+                    0x4207..=0x4209 => {
+                        // HTIMEL/H, VTIMEL - H/V timer settings
+                        // TODO: implement timer settings
+                    }
+                    0x420A => {
+                        // MDMAEN - DMA enable register
+                        // Bits 0-7: Enable DMA channels 0-7
+                        // TODO: implement DMA trigger
+                    }
+                    0x420B => {
+                        // HDMAEN - HDMA enable register
+                        // Bits 0-7: Enable HDMA channels 0-7
+                        // TODO: implement HDMA trigger
+                    }
+                    _ => {} // Other I/O registers ignored for now
+                }
+            }
+            
+            // DMA/HDMA Registers (Banks 00-3F and 80-BF, addresses 4300-437F)
+            (0x00..=0x3F, 0x4300..=0x437F) | (0x80..=0xBF, 0x4300..=0x437F) => {
+                // DMA/HDMA channel register writes
+                let channel = ((addr - 0x4300) / 8) as usize;
+                let offset = ((addr - 0x4300) % 8) as usize;
+                
+                if channel < 8 {
+                    match offset {
+                        0 => {} // DMAPx - DMA control
+                        1 => {} // BBADx - B-bus address
+                        2..=3 => {} // A1TxL/H - A-bus address
+                        4 => {} // SIZxL - Transfer size low
+                        5 => {} // SIZxH - Transfer size high
+                        6..=7 => {} // INDX registers
+                        _ => {}
+                    }
+                }
+                // TODO: implement DMA register handling
+            }
+            
+            // WRAM (Work RAM) Access (Banks 7E-7F, all addresses)
             (0x7E..=0x7F, _) => {
-                self.ram[((full_addr - 0x7E0000) as usize)] = data;
+                self.ram[(full_addr - 0x7E0000) as usize] = data;
             }
-            // Writing to ROM is ignored
+            
+            // Writing to Cartridge ROM is ignored
+            (0x00..=0x3F, 0x8000..=0xFFFF) | (0x80..=0xBF, 0x8000..=0xFFFF) => {
+                // ROM write ignored
+            }
+            
+            // HiROM cartridge
+            (0xC0..=0xFF, _) => {
+                // ROM write ignored
+            }
+            
+            // Unmapped memory writes are ignored
             _ => {}
         }
+    }
+    
+    // Trigger NMI interrupt (from PPU V-blank)
+    pub fn trigger_nmi(&mut self, cpu: &mut crate::cpu::_65816) {
+        cpu.nmi_pending = true;
+    }
+    
+    // Trigger IRQ interrupt
+    pub fn trigger_irq(&mut self, cpu: &mut crate::cpu::_65816) {
+        cpu.irq_pending = true;
     }
 }

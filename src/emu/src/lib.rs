@@ -30,14 +30,37 @@ pub fn run() {
     let mut my_bus = bus::Bus::new();
     let mut my_cpu = cpu::_65816::new();
 
-    while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Emulator tick
-        my_cpu.tick(&mut my_bus);
+    let mut ppu_cycle_counter: u32 = 0;
+    let mut last_vblank_state = false;
 
-        // TODO: Update buffer with framebuffer data from PPU
-        // For now, fill with a color pattern
-        for i in 0..buffer.len() {
-            buffer[i] = 0x00336699; // ARGB
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        // Execute CPU instruction (assume ~4 cycles average per instruction)
+        my_cpu.tick(&mut my_bus);
+        
+        // Convert to PPU cycles (rough approximation: 1 CPU cycle ≈ 1 PPU cycle)
+        ppu_cycle_counter += 4;
+        
+        // Process PPU cycles
+        while ppu_cycle_counter > 0 {
+            my_bus.ppu.tick();
+            
+            // Render scanline at the start of a new scanline
+            if my_bus.ppu.cycle == 0 && my_bus.ppu.scanline < 224 {
+                my_bus.ppu.render_scanline();
+            }
+            
+            ppu_cycle_counter -= 1;
+        }
+        
+        // Trigger NMI when V-blank starts (falling edge detection)
+        if my_bus.ppu.vblank && !last_vblank_state {
+            my_bus.trigger_nmi(&mut my_cpu);
+        }
+        last_vblank_state = my_bus.ppu.vblank;
+
+        // Copy PPU framebuffer to display buffer
+        for (i, pixel) in my_bus.ppu.framebuffer.iter().enumerate() {
+            buffer[i] = *pixel;
         }
 
         window.update_with_buffer(&buffer, width, height).unwrap();

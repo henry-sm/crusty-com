@@ -35,3 +35,4 @@ Thumbs.db
 /gui/src-tauri/dist/
 /gui/src-tauri/node_modules/
 /gui/src-tauri/*.log
+/todo
