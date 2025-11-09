@@ -25,7 +25,6 @@ async function initApp() {
     }
 
     const { invoke } = window.__TAURI__.core;
-    const { listen } = window.__TAURI__.event;
     const { open } = window.__TAURI__.dialog;
 
     const canvas = document.getElementById('screen');
@@ -50,12 +49,30 @@ async function initApp() {
     };
 
     // Listen for frame updates from the Rust backend
-    await listen('frame-update', (event) => {
-        const frameData = new Uint32Array(event.payload);
-        const buffer = new Uint8ClampedArray(frameData.buffer);
-        imageData.data.set(buffer);
-        ctx.putImageData(imageData, 0, 0);
-    });
+    // Instead of events, we poll for frames
+    // This is more reliable than event serialization for large data
+    
+    async function renderLoop() {
+        while (true) {
+            try {
+                const frameData = await invoke('get_frame');
+                if (frameData && frameData.length === 256 * 224) {
+                    // Convert array to Uint32Array (already in correct format)
+                    const buffer = new Uint8ClampedArray(new Uint32Array(frameData).buffer);
+                    imageData.data.set(buffer);
+                    ctx.putImageData(imageData, 0, 0);
+                }
+            } catch (e) {
+                console.error(`Frame rendering error: ${e}`);
+            }
+            
+            // ~60 FPS (frame rate matching emulation)
+            await new Promise(resolve => setTimeout(resolve, 16));
+        }
+    }
+    
+    // Start the render loop
+    renderLoop();
 
     // Handle keyboard input
     document.addEventListener('keydown', async (e) => {

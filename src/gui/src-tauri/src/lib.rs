@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{State, Window, Emitter};
+use tauri::State;
 use emu::cpu::_65816;
 use emu::bus::Bus;
 
@@ -22,7 +22,7 @@ struct AppState {
 }
 
 #[tauri::command]
-fn load_rom(path: String, state: State<AppState>, window: Window) -> Result<(), String> {
+fn load_rom(path: String, state: State<AppState>) -> Result<(), String> {
     println!("Loading ROM from: {}", path);
 
     let mut emu_state = EmuState {
@@ -38,7 +38,6 @@ fn load_rom(path: String, state: State<AppState>, window: Window) -> Result<(), 
 
     // Start the emulator loop in a background thread
     let emu_arc = Arc::clone(&state.emulator);
-    let window_clone = window.clone();
     thread::spawn(move || {
         let mut frame_count = 0;
         let mut last_time = Instant::now();
@@ -71,20 +70,22 @@ fn load_rom(path: String, state: State<AppState>, window: Window) -> Result<(), 
             }
             drop(guard);
             
-            // Emit frame update to frontend
-            let guard = emu_arc.lock().unwrap();
-            if let Some(emu) = guard.as_ref() {
-                let screen_data = emu.screen_buffer.lock().unwrap().clone();
-                let _ = window_clone.emit("frame-update", &screen_data);
-            }
-            drop(guard);
-            
             // Frame rate limiting (~60 FPS)
             thread::sleep(Duration::from_millis(16));
         }
     });
 
     Ok(())
+}
+
+#[tauri::command]
+fn get_frame(state: State<AppState>) -> Vec<u32> {
+    let guard = state.emulator.lock().unwrap();
+    if let Some(emu) = guard.as_ref() {
+        emu.screen_buffer.lock().unwrap().clone()
+    } else {
+        vec![0; 256 * 224]
+    }
 }
 
 #[tauri::command]
@@ -111,7 +112,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![load_rom, press_button, release_button])
+        .invoke_handler(tauri::generate_handler![load_rom, get_frame, press_button, release_button])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
