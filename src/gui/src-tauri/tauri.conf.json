@@ -19,14 +19,7 @@
       "csp": null
     }
   },
-  "plugins": {
-    "dialog": {
-      "all": true
-    },
-    "shell": {
-      "open": true
-    }
-  },
+  "plugins": {},
   "bundle": {
     "active": true,
     "targets": "all",

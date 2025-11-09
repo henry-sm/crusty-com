@@ -6,4 +6,4 @@ edition = "2021"
 
 [dependencies]
 # Add any dependencies your SNES emulator needs here
-minifb = "0.25"
+# minifb removed - using Tauri GUI instead

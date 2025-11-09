@@ -5,12 +5,10 @@
 
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{State, Window, Emitter};
 use emu::cpu::_65816;
 use emu::bus::Bus;
-
-
 
 struct EmuState {
     cpu: _65816,
@@ -18,15 +16,10 @@ struct EmuState {
     screen_buffer: Arc<Mutex<Vec<u32>>>,
 }
 
-
 #[derive(Default)]
 struct AppState {
     emulator: Arc<Mutex<Option<EmuState>>>,
 }
-
-
-
-
 
 #[tauri::command]
 fn load_rom(path: String, state: State<AppState>, window: Window) -> Result<(), String> {
@@ -47,43 +40,70 @@ fn load_rom(path: String, state: State<AppState>, window: Window) -> Result<(), 
     let emu_arc = Arc::clone(&state.emulator);
     let window_clone = window.clone();
     thread::spawn(move || {
+        let mut frame_count = 0;
+        let mut last_time = Instant::now();
+        
         loop {
             let mut guard = emu_arc.lock().unwrap();
             if let Some(emu) = guard.as_mut() {
-                for _ in 0..100000 {
+                // Run CPU cycles for one frame (~88657 cycles at 21.477 MHz for NTSC)
+                for _ in 0..88657 {
                     emu.cpu.tick(&mut emu.bus);
                 }
-                let mut screen = emu.screen_buffer.lock().unwrap();
-                for pixel in screen.iter_mut() {
-                    *pixel = rand::random::<u32>() | 0xFF_00_00_00;
+                
+                // Copy PPU framebuffer to screen buffer
+                {
+                    let mut screen = emu.screen_buffer.lock().unwrap();
+                    for (i, pixel) in emu.bus.ppu.framebuffer.iter().enumerate() {
+                        if i < screen.len() {
+                            screen[i] = *pixel;
+                        }
+                    }
+                }
+                
+                frame_count += 1;
+                let elapsed = last_time.elapsed();
+                if elapsed >= Duration::from_secs(1) {
+                    println!("FPS: {}", frame_count);
+                    frame_count = 0;
+                    last_time = Instant::now();
                 }
             }
             drop(guard);
-            thread::sleep(Duration::from_millis(16));
-        }
-    });
-
-    // Start a separate thread to send frame updates to the frontend
-    let emu_arc_clone = Arc::clone(&state.emulator);
-    thread::spawn(move || {
-        loop {
-            let guard = emu_arc_clone.lock().unwrap();
+            
+            // Emit frame update to frontend
+            let guard = emu_arc.lock().unwrap();
             if let Some(emu) = guard.as_ref() {
                 let screen_data = emu.screen_buffer.lock().unwrap().clone();
-                window_clone.emit("frame-update", &screen_data).unwrap();
+                let _ = window_clone.emit("frame-update", &screen_data);
             }
             drop(guard);
+            
+            // Frame rate limiting (~60 FPS)
             thread::sleep(Duration::from_millis(16));
         }
     });
 
     Ok(())
 }
-    
-    
 
+#[tauri::command]
+fn press_button(button: u8, state: State<AppState>) -> Result<(), String> {
+    let mut guard = state.emulator.lock().unwrap();
+    if let Some(emu) = guard.as_mut() {
+        emu.bus.input.set_button(button as usize, true);
+    }
+    Ok(())
+}
 
-
+#[tauri::command]
+fn release_button(button: u8, state: State<AppState>) -> Result<(), String> {
+    let mut guard = state.emulator.lock().unwrap();
+    if let Some(emu) = guard.as_mut() {
+        emu.bus.input.set_button(button as usize, false);
+    }
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -91,7 +111,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![load_rom])
+        .invoke_handler(tauri::generate_handler![load_rom, press_button, release_button])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

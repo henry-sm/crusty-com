@@ -50,8 +50,8 @@ pub struct PPU {
     pub vblank: bool,                // V-blank flag
     pub hblank: bool,                // H-blank flag
     
-    // Framebuffer (256x224 NTSC)
-    pub framebuffer: [u32; 256 * 224], // 32-bit ARGB pixels
+    // Framebuffer (256x224 NTSC) - heap-allocated to avoid stack overflow
+    pub framebuffer: Box<[u32; 256 * 224]>, // 32-bit ARGB pixels
     
     // VRAM Address Pointer
     pub vram_addr: u16,              // Current VRAM address
@@ -92,7 +92,7 @@ impl PPU {
             vblank: false,
             hblank: false,
             
-            framebuffer: [0; 256 * 224],
+            framebuffer: Box::new([0; 256 * 224]),
             
             vram_addr: 0,
             vram_addr_high: false,

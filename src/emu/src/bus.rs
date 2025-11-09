@@ -1,21 +1,24 @@
 use crate::ppu::PPU;
 use crate::apu::APU;
 use crate::cart::Cartridge;
+use crate::input::Input;
 
 pub struct Bus {
-    ram: [u8; 131072], // 128KB WRAM
+    ram: Box<[u8; 131072]>, // 128KB WRAM - heap-allocated
     pub ppu: PPU,
     apu: APU,
     pub cart: Cartridge,
+    pub input: Input,
 }
 
 impl Bus {
     pub fn new() -> Self {
         Bus {
-            ram: [0; 131072],
+            ram: Box::new([0; 131072]),
             ppu: PPU::new(),
             apu: APU::new(),
             cart: Cartridge::new(),
+            input: Input::new(),
         }
     }
 
@@ -45,9 +48,13 @@ impl Bus {
                 // 4204-4206 = WRDIVL/H, WRDIVB (Division operands)
                 // 4207-4209 = HTIMEL/H, VTIMEL (H/V timer settings)
                 // 420A-420B = MDMAEN, HDMAEN (DMA/HDMA enable)
+                // 4216-4219 = Joypad data (serial or latched)
                 // 420C-420F = ROI, ROLD, etc.
-                // TODO: implement I/O register reads
-                0
+                match addr {
+                    0x4217 => self.input.read_serial(), // Joypad data (serial)
+                    0x4218..=0x4219 => self.input.read_buttons(), // Joypad data (latched)
+                    _ => 0 // TODO: implement other I/O register reads
+                }
             }
             
             // DMA/HDMA Registers (Banks 00-3F and 80-BF, addresses 4300-437F)
@@ -98,6 +105,10 @@ impl Bus {
             (0x00..=0x3F, 0x4200..=0x42FF) | (0x80..=0xBF, 0x4200..=0x42FF) => {
                 // CPU I/O registers write handling
                 match addr {
+                    0x4016 => {
+                        // JOYSER0 - Joypad strobe
+                        self.input.write_strobe(data);
+                    }
                     0x4200 => {
                         // NMITIMEN - NMI/Timer enable
                         // Bit 7: NMI enable
