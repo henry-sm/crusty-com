@@ -18,5 +18,5 @@ tauri-plugin-dialog = "2.0.0-beta"
 tauri-plugin-shell = "2.0.0-beta"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-emu = { path = "../../emu" } # Add this line
-rand = "0.8" # Add this for placeholder graphics
+emu = { path = "../../emu" }
+rand = "0.8" 

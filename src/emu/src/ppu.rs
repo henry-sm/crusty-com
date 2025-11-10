@@ -152,16 +152,103 @@ impl PPU {
         0xFF000000 | (r << 16) | (g << 8) | b
     }
     
-    // --- OAM (Sprite) Access ---
-    pub fn oam_read(&self, addr: u16) -> u8 {
-        self.oam[(addr as usize) & 0x1FF]
+    // --- Sprite Structure for easier processing ---
+    fn parse_oam_entry(&self, sprite_num: u8) -> SpriteEntry {
+        let base_addr = sprite_num as usize * 4;
+        
+        let x_low = self.oam[base_addr] as u16;
+        let y = self.oam[base_addr + 1] as u16;
+        let tile = self.oam[base_addr + 2] as u16;
+        let attr = self.oam[base_addr + 3];
+        
+        // Extended OAM data (addresses 256-544)
+        // High byte of X coordinate and size/priority
+        let x_high = if sprite_num < 128 {
+            let ext_addr = 256 + (sprite_num as usize >> 2);
+            let shift = (sprite_num & 3) << 1;
+            ((self.oam[ext_addr] >> shift) & 0x03) as u16
+        } else {
+            0
+        };
+        
+        let x = x_low | (x_high << 8);
+        let priority = (attr >> 5) & 0x03;
+        let palette = (attr >> 1) & 0x07;
+        let flip_h = (attr & 0x40) != 0;
+        let flip_v = (attr & 0x80) != 0;
+        
+        SpriteEntry {
+            x,
+            y,
+            tile,
+            priority,
+            palette,
+            flip_h,
+            flip_v,
+        }
     }
     
-    pub fn oam_write(&mut self, addr: u16, data: u8) {
-        self.oam[(addr as usize) & 0x1FF] = data;
+    fn get_sprite_pixel(&self, sprite: &SpriteEntry, pix_x: u16, pix_y: u16) -> (bool, u8) {
+        // Sprite data is in VRAM
+        // Object size is determined by control.obj_size
+        // Common sizes: 8x8, 16x16, 32x32
+        
+        let sprite_size = 8; // For now, support 8x8 sprites (most common)
+        
+        // Check if pixel is within sprite bounds
+        if pix_x >= sprite_size || pix_y >= sprite_size {
+            return (false, 0); // Transparent (outside sprite)
+        }
+        
+        let mut pixel_x = pix_x;
+        let mut pixel_y = pix_y;
+        
+        if sprite.flip_h {
+            pixel_x = sprite_size - 1 - pixel_x;
+        }
+        if sprite.flip_v {
+            pixel_y = sprite_size - 1 - pixel_y;
+        }
+        
+        // Sprite tile data is in VRAM starting at obj_addr
+        let tile_addr = self.control.obj_addr + (sprite.tile * 16);
+        
+        // 4bpp (16 colors per sprite)
+        // Each scanline of 8x8 sprite = 4 bytes (8 pixels * 4 bits)
+        let byte_offset = pixel_y * 4 + (pixel_x >> 1);
+        let bit_offset = (pixel_x & 0x01) << 2;
+        
+        let tile_data = self.vram[((tile_addr + byte_offset) as usize) & 0xFFFF];
+        let pixel = (tile_data >> bit_offset) & 0x0F;
+        
+        // Pixel 0 is transparent, 1-15 are opaque
+        let is_opaque = pixel != 0;
+        
+        if is_opaque {
+            // Convert to palette index
+            // Sprite palette starts at 128 in CGRAM
+            let palette_idx = 128 + (sprite.palette * 16) as u16 + pixel as u16;
+            (true, palette_idx as u8)
+        } else {
+            (false, 0)
+        }
     }
     
-    // --- Background Layer Reading ---
+    // --- OAM Entry Structure ---
+}
+
+#[derive(Clone, Copy)]
+struct SpriteEntry {
+    x: u16,
+    y: u16,
+    tile: u16,
+    priority: u8,
+    palette: u8,
+    flip_h: bool,
+    flip_v: bool,
+}
+
+impl PPU {
     fn get_bg_tile(&self, bg: u8, map_x: u16, map_y: u16) -> (u8, bool, bool, u8) {
         // Get background control
         let bg_ctrl = self.bg_control[bg as usize];
@@ -259,9 +346,10 @@ impl PPU {
         
         let y = self.scanline;
         
-        // Render Mode 0: 4 background layers, 2bpp each
+        // Render Mode 0: 4 background layers, 2bpp each, with sprites
         for x in 0..256 {
             let mut color = 0xFF000000; // Default: black
+            let mut has_bg = false;
             
             // Layer priority (simplified - just draw top layer)
             for bg in 0..4 {
@@ -272,12 +360,66 @@ impl PPU {
                 
                 if is_opaque {
                     color = self.get_color(palette_idx as u16);
+                    has_bg = true;
                     break; // Use first opaque layer
                 }
             }
             
+            // Check sprites for this pixel
+            let mut sprite_rendered = false;
+            let mut sprite_color = 0;
+            let mut sprite_priority = 0;
+            
+            // Process sprites in reverse order (128 down to 0)
+            for sprite_num in (0..128).rev() {
+                let sprite = self.parse_oam_entry(sprite_num as u8);
+                
+                // Check if sprite is on this scanline
+                let sprite_start_y = sprite.y as i16;
+                let sprite_end_y = (sprite.y + 8) as i16;
+                let scan_y = y as i16;
+                
+                if scan_y >= sprite_start_y && scan_y < sprite_end_y {
+                    // Check X coordinate
+                    let sprite_start_x = (sprite.x as i16) - 128; // Sprites have offset X
+                    let sprite_end_x = sprite_start_x + 8;
+                    let pixel_x = x as i16;
+                    
+                    if pixel_x >= sprite_start_x && pixel_x < sprite_end_x {
+                        let pix_x = (pixel_x - sprite_start_x) as u16;
+                        let pix_y = (scan_y - sprite_start_y) as u16;
+                        
+                        if let (true, palette_idx) = self.get_sprite_pixel(&sprite, pix_x, pix_y) {
+                            sprite_color = self.get_color(palette_idx as u16);
+                            sprite_priority = sprite.priority;
+                            sprite_rendered = true;
+                            break; // Use the first (topmost) sprite found
+                        }
+                    }
+                }
+            }
+            
+            // Composite sprite and background based on priority
+            if sprite_rendered {
+                // Sprite priority: 3 is in front, 0 is behind
+                // Simplified: if sprite priority >= 2 OR no background, use sprite
+                if sprite_priority >= 2 || !has_bg {
+                    color = sprite_color;
+                }
+                // else keep background color
+            }
+            
             self.framebuffer[(y as usize * 256) + x] = color;
         }
+    }
+    
+    // --- OAM (Sprite) Access ---
+    pub fn oam_read(&self, addr: u16) -> u8 {
+        self.oam[(addr as usize) & 0x1FF]
+    }
+
+    pub fn oam_write(&mut self, addr: u16, data: u8) {
+        self.oam[(addr as usize) & 0x1FF] = data;
     }
     
     // --- Register Read/Write (from CPU) ---
