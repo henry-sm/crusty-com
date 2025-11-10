@@ -188,12 +188,27 @@ impl PPU {
         }
     }
     
+    fn get_sprite_size(&self) -> u16 {
+        // Object size from control register
+        // 0=8x8, 1=16x16, 2=32x32, 3=64x64, 4=16x32, 5=32x64, 6=32x32 (alt), 7=16x16 (alt)
+        match self.control.obj_size {
+            0 => 8,
+            1 => 16,
+            2 => 32,
+            3 => 64,
+            4 => 16,    // 16x32 (use base width)
+            5 => 32,    // 32x64 (use base width)
+            6 => 32,    // 32x32 alternate
+            7 => 16,    // 16x16 alternate
+            _ => 8,
+        }
+    }
+    
     fn get_sprite_pixel(&self, sprite: &SpriteEntry, pix_x: u16, pix_y: u16) -> (bool, u8) {
         // Sprite data is in VRAM
         // Object size is determined by control.obj_size
-        // Common sizes: 8x8, 16x16, 32x32
         
-        let sprite_size = 8; // For now, support 8x8 sprites (most common)
+        let sprite_size = self.get_sprite_size();
         
         // Check if pixel is within sprite bounds
         if pix_x >= sprite_size || pix_y >= sprite_size {
@@ -210,13 +225,25 @@ impl PPU {
             pixel_y = sprite_size - 1 - pixel_y;
         }
         
+        // Calculate tile grid position (sprite_size / 8 tiles per dimension)
+        let tiles_per_row = sprite_size / 8;
+        let tile_x = pixel_x / 8;
+        let tile_y = pixel_y / 8;
+        let tile_offset = tile_y * tiles_per_row + tile_x;
+        
         // Sprite tile data is in VRAM starting at obj_addr
-        let tile_addr = self.control.obj_addr + (sprite.tile * 16);
+        // Each sprite tile is stored sequentially
+        let tile_num = sprite.tile + tile_offset as u16;
+        let tile_addr = self.control.obj_addr + (tile_num * 16);
+        
+        // Position within the 8x8 tile
+        let pix_in_tile_x = pixel_x % 8;
+        let pix_in_tile_y = pixel_y % 8;
         
         // 4bpp (16 colors per sprite)
-        // Each scanline of 8x8 sprite = 4 bytes (8 pixels * 4 bits)
-        let byte_offset = pixel_y * 4 + (pixel_x >> 1);
-        let bit_offset = (pixel_x & 0x01) << 2;
+        // Each scanline of 8x8 tile = 4 bytes (8 pixels * 4 bits)
+        let byte_offset = pix_in_tile_y * 4 + (pix_in_tile_x >> 1);
+        let bit_offset = (pix_in_tile_x & 0x01) << 2;
         
         let tile_data = self.vram[((tile_addr + byte_offset) as usize) & 0xFFFF];
         let pixel = (tile_data >> bit_offset) & 0x0F;
@@ -345,13 +372,35 @@ impl PPU {
         }
         
         let y = self.scanline;
+        let sprite_size = self.get_sprite_size();
         
-        // Render Mode 0: 4 background layers, 2bpp each, with sprites
-        for x in 0..256 {
-            let mut color = 0xFF000000; // Default: black
-            let mut has_bg = false;
+        // Pre-process sprites on this scanline to avoid repeated lookups
+        let mut active_sprites: Vec<(u8, SpriteEntry)> = Vec::new();
+        for sprite_num in 0..128 {
+            let sprite = self.parse_oam_entry(sprite_num);
             
-            // Layer priority (simplified - just draw top layer)
+            // Check if sprite is visible on this scanline
+            // Y coordinate wraps at 256
+            let sprite_y_wrapped = sprite.y.wrapping_add(1) & 0xFF; // +1 for SNES behavior
+            let sprite_end_y = (sprite_y_wrapped as u16).wrapping_add(sprite_size);
+            
+            // Check if scanline is within sprite Y range
+            if y >= sprite_y_wrapped as u16 && y < sprite_end_y {
+                active_sprites.push((sprite_num, sprite));
+            }
+            
+            if active_sprites.len() >= 32 {
+                break; // SNES hardware limit: max 32 sprites per scanline
+            }
+        }
+        
+        // Render each pixel on this scanline
+        for x in 0..256 {
+            let mut color = 0xFF000000; // Default: black (backdrop)
+            let mut has_bg = false;
+            let mut bg_priority = 0;
+            
+            // Render background layers with priority
             for bg in 0..4 {
                 let bg_y = (y + self.bg_offset[bg as usize].y) & 0xFFFF;
                 let bg_x = (x as u16 + self.bg_offset[bg as usize].x) & 0xFFFF;
@@ -360,53 +409,49 @@ impl PPU {
                 
                 if is_opaque {
                     color = self.get_color(palette_idx as u16);
+                    bg_priority = (palette_idx >> 5) & 0x03;
                     has_bg = true;
-                    break; // Use first opaque layer
+                    break; // Use first opaque layer (simplified priority)
                 }
             }
             
-            // Check sprites for this pixel
-            let mut sprite_rendered = false;
-            let mut sprite_color = 0;
-            let mut sprite_priority = 0;
-            
-            // Process sprites in reverse order (128 down to 0)
-            for sprite_num in (0..128).rev() {
-                let sprite = self.parse_oam_entry(sprite_num as u8);
+            // Composite sprites over backgrounds
+            // Process sprites in reverse order (higher indices are lower priority)
+            for &(sprite_num, sprite) in active_sprites.iter().rev() {
+                // Calculate X bounds
+                let sprite_x = (sprite.x as i16) - 128; // Account for offset
+                let sprite_x_end = sprite_x + sprite_size as i16;
+                let pixel_x = x as i16;
                 
-                // Check if sprite is on this scanline
-                let sprite_start_y = sprite.y as i16;
-                let sprite_end_y = (sprite.y + 8) as i16;
-                let scan_y = y as i16;
-                
-                if scan_y >= sprite_start_y && scan_y < sprite_end_y {
-                    // Check X coordinate
-                    let sprite_start_x = (sprite.x as i16) - 128; // Sprites have offset X
-                    let sprite_end_x = sprite_start_x + 8;
-                    let pixel_x = x as i16;
+                if pixel_x >= sprite_x && pixel_x < sprite_x_end {
+                    // Calculate Y position within sprite
+                    let sprite_y_wrapped = sprite.y.wrapping_add(1) as i16;
+                    let pix_y = (y as i16 - sprite_y_wrapped) as u16;
                     
-                    if pixel_x >= sprite_start_x && pixel_x < sprite_end_x {
-                        let pix_x = (pixel_x - sprite_start_x) as u16;
-                        let pix_y = (scan_y - sprite_start_y) as u16;
+                    // Calculate X position within sprite
+                    let pix_x = (pixel_x - sprite_x) as u16;
+                    
+                    if let (true, palette_idx) = self.get_sprite_pixel(&sprite, pix_x, pix_y) {
+                        let sprite_color = self.get_color(palette_idx as u16);
+                        let sprite_priority = sprite.priority;
                         
-                        if let (true, palette_idx) = self.get_sprite_pixel(&sprite, pix_x, pix_y) {
-                            sprite_color = self.get_color(palette_idx as u16);
-                            sprite_priority = sprite.priority;
-                            sprite_rendered = true;
-                            break; // Use the first (topmost) sprite found
+                        // Determine if sprite should be rendered on top
+                        // Priority 3 is always on top
+                        // Priority 0-2 respects background priority
+                        let render_sprite = if sprite_priority == 3 {
+                            true
+                        } else if sprite_priority == 2 {
+                            !has_bg || bg_priority == 0
+                        } else {
+                            !has_bg
+                        };
+                        
+                        if render_sprite {
+                            color = sprite_color;
+                            break; // Use first sprite found (topmost)
                         }
                     }
                 }
-            }
-            
-            // Composite sprite and background based on priority
-            if sprite_rendered {
-                // Sprite priority: 3 is in front, 0 is behind
-                // Simplified: if sprite priority >= 2 OR no background, use sprite
-                if sprite_priority >= 2 || !has_bg {
-                    color = sprite_color;
-                }
-                // else keep background color
             }
             
             self.framebuffer[(y as usize * 256) + x] = color;
