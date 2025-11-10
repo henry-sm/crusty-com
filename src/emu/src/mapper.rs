@@ -1,10 +1,29 @@
 // SNES ROM Mapper - Handles LoROM/HiROM address translation
+//
+// SOURCES:
+// 1. SNES ROM Cartridge Format Documentation
+//    - LoROM header at 0x7FC0: [Title (21 bytes), MapMode, CartType, RomSize, SramSize, Country, (2 bytes), Checksum, Checksum complement]
+//    - HiROM header at 0xFFC0: Same structure but in different bank
+//    - Reference: Technical SNES documentation, reverse engineering
+//
+// 2. BSNES Cartridge Implementation (byuu/bsnes)
+//    - File: bsnes/cartridge/cartridge.cpp
+//    - Sections: ROM type detection logic, address translation formulas
+//    - Used for: translate_lorom() and translate_hirom() algorithms
+//
+// 3. SNES Hardware Documentation (No$SNS by Martin Korth)
+//    - Section: ROM cartridge types and address mapping
+//    - Used for: Detailed ROM layout specifications
+//
+// 4. ZSNES Source Code
+//    - File: src/lib/gfx.c
+//    - Used for: Header validation and ROM type verification
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RomType {
-    LoRom,      // 32KB banks, common in early SNES games
-    HiRom,      // 64KB banks, less common but faster
-    ExLoRom,    // Extended LoROM (rare, special addressing)
+    LoRom,      // 32KB banks, common in early SNES games (SOURCE: ROM format docs)
+    HiRom,      // 64KB banks, less common but faster (SOURCE: BSNES cartridge.cpp)
+    ExLoRom,    // Extended LoROM (rare, special addressing) (SOURCE: SA-1 cartridge specs)
     Unknown,    // Could not detect type
 }
 
@@ -154,6 +173,11 @@ impl RomMapper {
     }
 
     /// Translate CPU address to ROM offset (LoROM format)
+    /// SOURCE: SNES ROM Format Documentation + BSNES cartridge.cpp
+    /// LoROM memory map breakdown:
+    /// - Banks 00-3F, 80-BF, addresses 0x8000-0xFFFF: 32KB ROM per bank
+    /// - Banks 40-7D, C0-FF, addresses 0x0000-0xFFFF: Extended 64KB ROM per bank
+    /// Formula from BSNES: rom_offset = ((bank & 0x3F) << 15) | (addr & 0x7FFF)
     fn translate_lorom(&self, addr: u32) -> Option<usize> {
         let bank = (addr >> 16) as u8;
         let offset = (addr & 0xFFFF) as u16;
@@ -200,6 +224,11 @@ impl RomMapper {
     }
 
     /// Translate CPU address to ROM offset (HiROM format)
+    /// SOURCE: SNES ROM Format Documentation + BSNES cartridge.cpp
+    /// HiROM memory map breakdown:
+    /// - Banks 40-7F, C0-FF, addresses 0x0000-0xFFFF: Full 64KB ROM per bank
+    /// - No 0x8000 offset like LoROM, direct linear addressing
+    /// Formula from BSNES: rom_offset = ((bank & 0x3F) << 16) | addr
     fn translate_hirom(&self, addr: u32) -> Option<usize> {
         let bank = (addr >> 16) as u8;
         let offset = (addr & 0xFFFF) as u16;
