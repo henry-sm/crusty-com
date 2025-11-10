@@ -2,6 +2,7 @@ use crate::ppu::PPU;
 use crate::apu::APU;
 use crate::cart::Cartridge;
 use crate::input::Input;
+use crate::dma::DMAController;
 
 pub struct Bus {
     ram: Box<[u8; 131072]>, // 128KB WRAM - heap-allocated
@@ -9,6 +10,7 @@ pub struct Bus {
     apu: APU,
     pub cart: Cartridge,
     pub input: Input,
+    pub dma: DMAController,
 }
 
 impl Bus {
@@ -19,6 +21,7 @@ impl Bus {
             apu: APU::new(),
             cart: Cartridge::new(),
             input: Input::new(),
+            dma: DMAController::new(),
         }
     }
 
@@ -59,13 +62,12 @@ impl Bus {
             
             // DMA/HDMA Registers (Banks 00-3F and 80-BF, addresses 4300-437F)
             (0x00..=0x3F, 0x4300..=0x437F) | (0x80..=0xBF, 0x4300..=0x437F) => {
-                // 8 DMA channels, each has 8 bytes of registers
-                // 4300-4307 = DMA0 registers
-                // 4308-430F = DMA1 registers
+                // 8 DMA channels, each has 16 bytes of registers
+                // 4300-430F = DMA0 registers
+                // 4310-431F = DMA1 registers
                 // ... through ...
-                // 4338-433F = DMA7 registers
-                // TODO: implement DMA system
-                0
+                // 4370-437F = DMA7 registers
+                self.dma.read_register(addr)
             }
             
             // WRAM (Work RAM) Access (Banks 7E-7F, all addresses)
@@ -134,14 +136,17 @@ impl Bus {
                         // TODO: implement timer settings
                     }
                     0x420A => {
-                        // MDMAEN - DMA enable register
+                        // MDMAEN - DMA enable register (0x420C in some docs)
                         // Bits 0-7: Enable DMA channels 0-7
-                        // TODO: implement DMA trigger
+                        // SOURCE: No$SNS 0x420C documentation
+                        self.dma.set_dma_enabled(data != 0);
+                        // TODO: Execute DMA transfer when triggered
                     }
                     0x420B => {
                         // HDMAEN - HDMA enable register
                         // Bits 0-7: Enable HDMA channels 0-7
-                        // TODO: implement HDMA trigger
+                        // SOURCE: No$SNS 0x420D documentation
+                        self.dma.set_hdma_enabled(data);
                     }
                     _ => {} // Other I/O registers ignored for now
                 }
@@ -150,21 +155,8 @@ impl Bus {
             // DMA/HDMA Registers (Banks 00-3F and 80-BF, addresses 4300-437F)
             (0x00..=0x3F, 0x4300..=0x437F) | (0x80..=0xBF, 0x4300..=0x437F) => {
                 // DMA/HDMA channel register writes
-                let channel = ((addr - 0x4300) / 8) as usize;
-                let offset = ((addr - 0x4300) % 8) as usize;
-                
-                if channel < 8 {
-                    match offset {
-                        0 => {} // DMAPx - DMA control
-                        1 => {} // BBADx - B-bus address
-                        2..=3 => {} // A1TxL/H - A-bus address
-                        4 => {} // SIZxL - Transfer size low
-                        5 => {} // SIZxH - Transfer size high
-                        6..=7 => {} // INDX registers
-                        _ => {}
-                    }
-                }
-                // TODO: implement DMA register handling
+                // SOURCE: No$SNS DMA register specification
+                self.dma.write_register(addr, data);
             }
             
             // WRAM (Work RAM) Access (Banks 7E-7F, all addresses)
