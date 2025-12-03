@@ -590,7 +590,6 @@ name = "crusty-com"
 version = "0.1.0"
 dependencies = [
  "emu",
- "gui_lib",
 ]
 
 [[package]]

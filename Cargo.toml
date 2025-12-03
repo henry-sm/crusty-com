@@ -10,4 +10,3 @@ members = [ "src/emu", "src/gui/src-tauri" ]
 
 [dependencies]
 emu = { path = "src/emu" }
-gui_lib = { path = "src/gui/src-tauri" }

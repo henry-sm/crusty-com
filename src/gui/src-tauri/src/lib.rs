@@ -4,115 +4,60 @@
 )]
 
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
-use tauri::State;
 use emu::cpu::_65816;
 use emu::bus::Bus;
 
-struct EmuState {
-    cpu: _65816,
-    bus: Bus,
-    screen_buffer: Arc<Mutex<Vec<u32>>>,
+// Global emulator state
+pub struct EmuState {
+    pub cpu: _65816,
+    pub bus: Bus,
+    pub running: bool,
 }
 
 #[derive(Default)]
-struct AppState {
-    emulator: Arc<Mutex<Option<EmuState>>>,
+pub struct AppState {
+    pub emulator: Arc<Mutex<EmuState>>,
 }
 
-#[tauri::command]
-fn load_rom(path: String, state: State<AppState>) -> Result<(), String> {
-    println!("Loading ROM from: {}", path);
-
-    let mut emu_state = EmuState {
-        cpu: _65816::new(),
-        bus: Bus::new(),
-        screen_buffer: Arc::new(Mutex::new(vec![0; 256 * 224])),
-    };
-
-    // Load the ROM file into the cartridge
-    emu_state.bus.cart.load_rom(&path).map_err(|e| e.to_string())?;
-
-    *state.emulator.lock().unwrap() = Some(emu_state);
-
-    // Start the emulator loop in a background thread
-    let emu_arc = Arc::clone(&state.emulator);
-    thread::spawn(move || {
-        let mut frame_count = 0;
-        let mut last_time = Instant::now();
-        
-        loop {
-            let mut guard = emu_arc.lock().unwrap();
-            if let Some(emu) = guard.as_mut() {
-                // Run CPU cycles for one frame (~88657 cycles at 21.477 MHz for NTSC)
-                for _ in 0..88657 {
-                    emu.cpu.tick(&mut emu.bus);
-                }
-                
-                // Copy PPU framebuffer to screen buffer
-                {
-                    let mut screen = emu.screen_buffer.lock().unwrap();
-                    for (i, pixel) in emu.bus.ppu.framebuffer.iter().enumerate() {
-                        if i < screen.len() {
-                            screen[i] = *pixel;
-                        }
-                    }
-                }
-                
-                frame_count += 1;
-                let elapsed = last_time.elapsed();
-                if elapsed >= Duration::from_secs(1) {
-                    println!("FPS: {}", frame_count);
-                    frame_count = 0;
-                    last_time = Instant::now();
-                }
-            }
-            drop(guard);
-            
-            // Frame rate limiting (~60 FPS)
-            thread::sleep(Duration::from_millis(16));
+impl Default for EmuState {
+    fn default() -> Self {
+        EmuState {
+            cpu: _65816::new(),
+            bus: Bus::new(),
+            running: false,
         }
-    });
-
-    Ok(())
-}
-
-#[tauri::command]
-fn get_frame(state: State<AppState>) -> Vec<u32> {
-    let guard = state.emulator.lock().unwrap();
-    if let Some(emu) = guard.as_ref() {
-        emu.screen_buffer.lock().unwrap().clone()
-    } else {
-        vec![0; 256 * 224]
     }
 }
 
 #[tauri::command]
-fn press_button(button: u8, state: State<AppState>) -> Result<(), String> {
-    let mut guard = state.emulator.lock().unwrap();
-    if let Some(emu) = guard.as_mut() {
-        emu.bus.input.set_button(button as usize, true);
-    }
-    Ok(())
+fn init_emu() -> Result<String, String> {
+    println!("Emulator initialized");
+    Ok("OK".to_string())
 }
 
 #[tauri::command]
-fn release_button(button: u8, state: State<AppState>) -> Result<(), String> {
-    let mut guard = state.emulator.lock().unwrap();
-    if let Some(emu) = guard.as_mut() {
-        emu.bus.input.set_button(button as usize, false);
-    }
-    Ok(())
+fn get_status() -> String {
+    "Ready".to_string()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    println!("Starting Tauri application...");
+    
+    match tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![load_rom, get_frame, press_button, release_button])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .invoke_handler(tauri::generate_handler![init_emu, get_status])
+        .build(tauri::generate_context!()) {
+            Ok(app) => {
+                println!("Running app...");
+                app.run(|_app, event| {
+                    println!("Event: {:?}", event);
+                });
+            }
+            Err(e) => {
+                eprintln!("Failed to build app: {}", e);
+            }
+        }
 }

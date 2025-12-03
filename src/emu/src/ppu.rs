@@ -475,7 +475,7 @@ impl PPU {
             
             // Composite sprites over backgrounds
             // Process sprites in reverse order (higher indices are lower priority)
-            for &(sprite_num, sprite) in active_sprites.iter().rev() {
+            for &(_sprite_num, sprite) in active_sprites.iter().rev() {
                 // Calculate X bounds
                 let sprite_x = (sprite.x as i16) - 128; // Account for offset
                 let sprite_x_end = sprite_x + sprite_size as i16;

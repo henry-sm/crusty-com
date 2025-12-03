@@ -14,9 +14,6 @@
 //    - HDMA timing and per-scanline behavior
 //    - Transfer cycle accuracy
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 /// DMA Channel Structure
 /// SOURCE: No$SNS DMA register documentation (0x4300-0x430F per channel)
 /// Each DMA channel has 16 bytes of registers:
