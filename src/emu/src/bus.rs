@@ -7,7 +7,7 @@ use crate::dma::DMAController;
 pub struct Bus {
     ram: Box<[u8; 131072]>, // 128KB WRAM - heap-allocated
     pub ppu: PPU,
-    apu: APU,
+    pub apu: APU,
     pub cart: Cartridge,
     pub input: Input,
     pub dma: DMAController,

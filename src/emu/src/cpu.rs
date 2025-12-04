@@ -1016,6 +1016,12 @@ impl _65816 {
             // Unimplemented opcode
             _ => { /* Unimplemented opcode, do nothing for now */ self.cycles += 2; }
         }
+        
+        // APU ticks at approximately 1/21 the speed of the CPU
+        // Run APU for a proportional amount of work each cycle
+        if self.cycles % 21 == 0 {
+            bus.apu.tick();
+        }
     }
 
     // ... (keep your irq and nmi functions, but they will need to be updated later

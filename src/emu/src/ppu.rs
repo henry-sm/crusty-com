@@ -69,6 +69,7 @@ pub struct PPU {
     
     // PPU Control Registers
     pub control: PPUControl,
+    pub bg_mode: u8,                 // BG Mode (0-7) - register 0x2105, bits 0-2
     pub bg_control: [BGControl; 4],  // Background 0-3 control
     pub bg_offset: [BGOffset; 4],    // Background 0-3 offset
     
@@ -104,6 +105,8 @@ impl PPU {
                 obj_size: 0,
                 obj_addr: 0,
             },
+            
+            bg_mode: 0,  // Initialize BG mode to 0 (2bpp mode)
             
             bg_control: [
                 BGControl { tile_size: false, map_addr: 0, tile_addr: 0, mosaic: false };
@@ -344,6 +347,22 @@ impl PPU {
     }
     
     fn get_bg_pixel(&self, bg: u8, pix_x: u16, pix_y: u16) -> (u8, bool) {
+        // Dispatch to mode-specific handler
+        match self.bg_mode {
+            0 => self.get_bg_pixel_mode0(bg, pix_x, pix_y),
+            1 => self.get_bg_pixel_mode1(bg, pix_x, pix_y),
+            2 => self.get_bg_pixel_mode2(bg, pix_x, pix_y),
+            3 => self.get_bg_pixel_mode3(bg, pix_x, pix_y),
+            4 => self.get_bg_pixel_mode4(bg, pix_x, pix_y),
+            5 => self.get_bg_pixel_mode5(bg, pix_x, pix_y),
+            6 => self.get_bg_pixel_mode6(bg, pix_x, pix_y),
+            7 => self.get_bg_pixel_mode7(bg, pix_x, pix_y),
+            _ => (0, false),
+        }
+    }
+    
+    // Mode 0: 2bpp (4 colors per BG, 4 BGs)
+    fn get_bg_pixel_mode0(&self, bg: u8, pix_x: u16, pix_y: u16) -> (u8, bool) {
         let bg_ctrl = self.bg_control[bg as usize];
         
         // 8x8 tiles
@@ -354,7 +373,7 @@ impl PPU {
         
         let (tile_num, flip_h, flip_v, palette) = self.get_bg_tile(bg, tile_x, tile_y);
         
-        // Tile data is in VRAM (2bpp for mode 0)
+        // Tile data is in VRAM (2bpp)
         let tile_addr = bg_ctrl.tile_addr + (tile_num as u16 * 16);
         
         let mut pix_x_in_tile = in_tile_x;
@@ -372,7 +391,202 @@ impl PPU {
         
         // Palette index (palette * 4 + pixel)
         let palette_idx = ((palette as u16) << 2) | (pixel as u16);
-        (palette_idx as u8, pixel != 0) // Return (palette index, is_opaque)
+        (palette_idx as u8, pixel != 0)
+    }
+    
+    // Mode 1: 4bpp (16 colors per BG, 3 BGs)
+    fn get_bg_pixel_mode1(&self, bg: u8, pix_x: u16, pix_y: u16) -> (u8, bool) {
+        if bg >= 3 {
+            return (0, false); // Mode 1 only has 3 backgrounds
+        }
+        
+        let bg_ctrl = self.bg_control[bg as usize];
+        
+        // 8x8 tiles
+        let tile_x = (pix_x >> 3) & 0x1F;
+        let tile_y = (pix_y >> 3) & 0x1F;
+        let in_tile_x = pix_x & 0x07;
+        let in_tile_y = pix_y & 0x07;
+        
+        let (tile_num, flip_h, flip_v, palette) = self.get_bg_tile(bg, tile_x, tile_y);
+        
+        // Tile data is in VRAM (4bpp - 16 bytes per tile)
+        let tile_addr = bg_ctrl.tile_addr + (tile_num as u16 * 32);
+        
+        let mut pix_x_in_tile = in_tile_x;
+        let mut pix_y_in_tile = in_tile_y;
+        
+        if flip_h { pix_x_in_tile = 7 - pix_x_in_tile; }
+        if flip_v { pix_y_in_tile = 7 - pix_y_in_tile; }
+        
+        // For 4bpp, 2 pixels per byte
+        let byte_offset = pix_y_in_tile * 4 + (pix_x_in_tile >> 1);
+        let bit_offset = if pix_x_in_tile & 1 == 0 { 0 } else { 4 };
+        
+        let tile_data = self.vram[((tile_addr + byte_offset) as usize) & 0xFFFF];
+        let pixel = (tile_data >> bit_offset) & 0x0F;
+        
+        // Palette index (palette * 16 + pixel)
+        let palette_idx = ((palette as u16) << 4) | (pixel as u16);
+        (palette_idx as u8, pixel != 0)
+    }
+    
+    // Mode 2: 4bpp + offset per tile
+    fn get_bg_pixel_mode2(&self, bg: u8, pix_x: u16, pix_y: u16) -> (u8, bool) {
+        // Mode 2 is similar to Mode 1 but with per-tile offset capability
+        // For now, implement same as Mode 1 (offset support can be added later)
+        self.get_bg_pixel_mode1(bg, pix_x, pix_y)
+    }
+    
+    // Mode 3: 8bpp (256 colors)
+    fn get_bg_pixel_mode3(&self, bg: u8, pix_x: u16, pix_y: u16) -> (u8, bool) {
+        if bg != 0 {
+            return (0, false); // Mode 3 only has BG1
+        }
+        
+        let bg_ctrl = self.bg_control[0];
+        
+        // 8x8 tiles
+        let tile_x = (pix_x >> 3) & 0x1F;
+        let tile_y = (pix_y >> 3) & 0x1F;
+        let in_tile_x = pix_x & 0x07;
+        let in_tile_y = pix_y & 0x07;
+        
+        let (tile_num, flip_h, flip_v, _palette) = self.get_bg_tile(0, tile_x, tile_y);
+        
+        // Tile data is in VRAM (8bpp - 64 bytes per tile)
+        let tile_addr = bg_ctrl.tile_addr + (tile_num as u16 * 64);
+        
+        let mut pix_x_in_tile = in_tile_x;
+        let mut pix_y_in_tile = in_tile_y;
+        
+        if flip_h { pix_x_in_tile = 7 - pix_x_in_tile; }
+        if flip_v { pix_y_in_tile = 7 - pix_y_in_tile; }
+        
+        // For 8bpp, 1 pixel per byte
+        let byte_offset = pix_y_in_tile * 8 + pix_x_in_tile;
+        
+        let pixel = self.vram[((tile_addr + byte_offset) as usize) & 0xFFFF];
+        (pixel, pixel != 0)
+    }
+    
+    // Mode 4: 8bpp + offset per tile
+    fn get_bg_pixel_mode4(&self, bg: u8, pix_x: u16, pix_y: u16) -> (u8, bool) {
+        // Mode 4: BG1 is 8bpp, BG2 is 4bpp with offset per tile
+        match bg {
+            0 => {
+                // BG1: 8bpp
+                self.get_bg_pixel_mode3(0, pix_x, pix_y)
+            }
+            1 => {
+                // BG2: 4bpp with per-tile offset
+                // For now, implement as Mode 1 (offset support can be added)
+                self.get_bg_pixel_mode1(1, pix_x, pix_y)
+            }
+            _ => (0, false),
+        }
+    }
+    
+    // Mode 5: 256-pixel width mode
+    fn get_bg_pixel_mode5(&self, bg: u8, pix_x: u16, pix_y: u16) -> (u8, bool) {
+        // Mode 5: 256x224 or 512x224 resolution
+        // BG1: 4bpp at 256/512 width
+        // BG2: 2bpp at 256/512 width
+        
+        if bg >= 2 {
+            return (0, false); // Mode 5 only has 2 backgrounds
+        }
+        
+        let bg_ctrl = self.bg_control[bg as usize];
+        
+        // Tile size can be 8x8 or 16x16
+        let tile_size = if bg_ctrl.tile_size { 16 } else { 8 };
+        let tile_shift = if bg_ctrl.tile_size { 4 } else { 3 };
+        let tile_mask = if bg_ctrl.tile_size { 0x0F } else { 0x07 };
+        
+        let tile_x = (pix_x >> tile_shift) & 0x3F;  // 64 tiles wide
+        let tile_y = (pix_y >> tile_shift) & 0x1F;
+        let in_tile_x = pix_x & tile_mask;
+        let in_tile_y = pix_y & tile_mask;
+        
+        let (tile_num, flip_h, flip_v, palette) = self.get_bg_tile(bg, tile_x, tile_y);
+        
+        // Tile data is in VRAM
+        let tile_size_bytes = if bg == 0 { 32 } else { 16 }; // BG1 is 4bpp, BG2 is 2bpp
+        let tile_addr = bg_ctrl.tile_addr + (tile_num as u16 * tile_size_bytes);
+        
+        let mut pix_x_in_tile = in_tile_x;
+        let mut pix_y_in_tile = in_tile_y;
+        
+        if flip_h { pix_x_in_tile = (tile_size as u16 - 1) - pix_x_in_tile; }
+        if flip_v { pix_y_in_tile = (tile_size as u16 - 1) - pix_y_in_tile; }
+        
+        // Fetch pixel (mode-dependent bitness)
+        let pixel = if bg == 0 {
+            // 4bpp
+            let byte_offset = pix_y_in_tile * (tile_size as u16 / 2) + (pix_x_in_tile >> 1);
+            let bit_offset = if pix_x_in_tile & 1 == 0 { 0 } else { 4 };
+            let tile_data = self.vram[((tile_addr + byte_offset) as usize) & 0xFFFF];
+            (tile_data >> bit_offset) & 0x0F
+        } else {
+            // 2bpp
+            let byte_offset = pix_y_in_tile * (tile_size as u16 / 4) + (pix_x_in_tile >> 2);
+            let bit_offset = (pix_x_in_tile & 0x03) << 1;
+            let tile_data = self.vram[((tile_addr + byte_offset) as usize) & 0xFFFF];
+            (tile_data >> bit_offset) & 0x03
+        };
+        
+        // Palette index
+        let palette_idx = if bg == 0 {
+            ((palette as u16) << 4) | (pixel as u16)
+        } else {
+            ((palette as u16) << 2) | (pixel as u16)
+        };
+        
+        (palette_idx as u8, pixel != 0)
+    }
+    
+    // Mode 6: 256-pixel width + offset per tile
+    fn get_bg_pixel_mode6(&self, bg: u8, pix_x: u16, pix_y: u16) -> (u8, bool) {
+        // Mode 6: Similar to Mode 5 with offset-per-tile capability
+        // For now, implement as Mode 5
+        self.get_bg_pixel_mode5(bg, pix_x, pix_y)
+    }
+    
+    // Mode 7: Affine transformations (rotation/scaling)
+    fn get_bg_pixel_mode7(&self, bg: u8, pix_x: u16, pix_y: u16) -> (u8, bool) {
+        // Mode 7: Only BG1 in affine mode, full 128x128 tile map
+        if bg != 0 {
+            return (0, false); // Mode 7 only affects BG1
+        }
+        
+        // In Mode 7, BG1 can be scaled/rotated (would require matrix registers)
+        // For now, render as if no transformation (identity matrix)
+        
+        let bg_ctrl = self.bg_control[0];
+        
+        // Mode 7: 128x128 tile map (16x16 tiles of 8x8 pixels)
+        let tile_x = (pix_x >> 3) & 0x0F;
+        let tile_y = (pix_y >> 3) & 0x0F;
+        let in_tile_x = pix_x & 0x07;
+        let in_tile_y = pix_y & 0x07;
+        
+        let (tile_num, flip_h, flip_v, _palette) = self.get_bg_tile(0, tile_x, tile_y);
+        
+        // Tile data is in VRAM (8bpp in Mode 7)
+        let tile_addr = bg_ctrl.tile_addr + (tile_num as u16 * 64);
+        
+        let mut pix_x_in_tile = in_tile_x;
+        let mut pix_y_in_tile = in_tile_y;
+        
+        if flip_h { pix_x_in_tile = 7 - pix_x_in_tile; }
+        if flip_v { pix_y_in_tile = 7 - pix_y_in_tile; }
+        
+        // For 8bpp, 1 pixel per byte
+        let byte_offset = pix_y_in_tile * 8 + pix_x_in_tile;
+        
+        let pixel = self.vram[((tile_addr + byte_offset) as usize) & 0xFFFF];
+        (pixel, pixel != 0)
     }
     
     // --- Main PPU Tick (Per Cycle) ---
@@ -548,9 +762,9 @@ impl PPU {
                 self.control = PPUControl::from_byte(data);
             }
             0x05 => {
-                // BGXOFS - BG offset X
-                // Which BG is determined by register sequence
-                self.temp_x = ((data as u16) << 8) | (self.temp_x & 0xFF);
+                // BGMODE - Background mode register (0x2105)
+                // Bits 0-2: BG mode (0-7)
+                self.bg_mode = data & 0x07;
             }
             0x06 => {
                 // BGXOFS - BG offset Y

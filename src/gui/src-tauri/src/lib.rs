@@ -4,6 +4,8 @@
 )]
 
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use emu::cpu::_65816;
 use emu::bus::Bus;
 
@@ -51,6 +53,7 @@ fn load_rom(path: String, state: tauri::State<'_, AppState>) -> Result<String, S
         Ok(_) => {
             println!("ROM loaded successfully");
             emu_state.running = true;
+            println!("Starting emulation loop...");
             Ok(format!("ROM loaded: {}", path))
         }
         Err(e) => {
@@ -85,10 +88,37 @@ fn release_button(button: u8, state: tauri::State<'_, AppState>) -> Result<(), S
 pub fn run() {
     println!("Starting Tauri application...");
     
+    let app_state = AppState::default();
+    let emu_arc = Arc::clone(&app_state.emulator);
+    
+    // Start emulation thread
+    thread::spawn(move || {
+        loop {
+            {
+                let mut emu_guard = emu_arc.lock().unwrap();
+                
+                if emu_guard.running {
+                    // Run CPU cycles for one frame (~88657 cycles at 21.477 MHz for NTSC)
+                    for _ in 0..88657 {
+                        // Use unsafe to bypass borrow checker since we know they're separate fields
+                        unsafe {
+                            let cpu_ptr: *mut _65816 = &mut emu_guard.cpu;
+                            let bus_ptr: *mut Bus = &mut emu_guard.bus;
+                            (*cpu_ptr).tick(&mut *bus_ptr);
+                        }
+                    }
+                    println!("Frame rendered");
+                }
+            } // Lock is released here
+            
+            thread::sleep(Duration::from_millis(16)); // ~60 FPS
+        }
+    });
+    
     match tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .manage(AppState::default())
+        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             init_emu, 
             get_status, 
