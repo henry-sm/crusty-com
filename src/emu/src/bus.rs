@@ -15,8 +15,15 @@ pub struct Bus {
 
 impl Bus {
     pub fn new() -> Self {
+        let mut ram = Box::new([0; 131072]);
+        
+        // Initialize RAM with values expected by SNES bootloader
+        // RAM[0x31] = 0x03 signals that hardware initialization is complete (IPL ROM sets this)
+        // This allows bootloader code that waits for this flag to proceed
+        ram[0x31] = 0x03;
+        
         Bus {
-            ram: Box::new([0; 131072]),
+            ram,
             ppu: PPU::new(),
             apu: APU::new(),
             cart: Cartridge::new(),
@@ -51,9 +58,21 @@ impl Bus {
                 // 4204-4206 = WRDIVL/H, WRDIVB (Division operands)
                 // 4207-4209 = HTIMEL/H, VTIMEL (H/V timer settings)
                 // 420A-420B = MDMAEN, HDMAEN (DMA/HDMA enable)
+                // 4212 = HVBJOY (H/V-Blank flag and Joypad Busy flag) - READ ONLY
                 // 4216-4219 = Joypad data (serial or latched)
                 // 420C-420F = ROI, ROLD, etc.
                 match addr {
+                    0x4212 => {
+                        // HVBJOY - H/V-Blank flag and Joypad Busy flag
+                        // Bit 7: V-Blank Period Flag (0=No, 1=VBlank)
+                        // Bit 6: H-Blank Period Flag (0=No, 1=HBlank)
+                        // Bits 5-1: Not used
+                        // Bit 0: Auto-Joypad-Read Busy Flag (usually 0)
+                        let mut status = 0u8;
+                        if self.ppu.vblank { status |= 0x80; }
+                        if self.ppu.hblank { status |= 0x40; }
+                        status
+                    }
                     0x4217 => self.input.read_serial(), // Joypad data (serial)
                     0x4218..=0x4219 => self.input.read_buttons(), // Joypad data (latched)
                     _ => 0 // TODO: implement other I/O register reads
@@ -72,6 +91,12 @@ impl Bus {
             
             // WRAM (Work RAM) Access (Banks 7E-7F, all addresses)
             (0x7E..=0x7F, _) => self.ram[(full_addr - 0x7E0000) as usize],
+            
+            // Cartridge ROM (LoROM extended banks 40-7D, addresses 0000-FFFF)
+            // ALSO LoROM banks 00-3F, addresses 0000-7FFF (for header/code in some games)
+            (0x00..=0x3F, 0x0000..=0x7FFF) | (0x40..=0x7D, 0x0000..=0xFFFF) => {
+                self.cart.read(full_addr)
+            }
             
             // Cartridge ROM (LoROM Memory Map - Banks 00-7D, addresses 8000-FFFF)
             (0x00..=0x3F, 0x8000..=0xFFFF) | (0x80..=0xBF, 0x8000..=0xFFFF) => {

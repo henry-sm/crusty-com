@@ -79,6 +79,7 @@ pub struct PPU {
     pub field: bool,                 // Field (interlace)
     pub vblank: bool,                // V-blank flag
     pub hblank: bool,                // H-blank flag
+    pub nmi_pending: bool,           // NMI interrupt flag (set at vblank start, cleared at vblank end)
     
     // Framebuffer (256x224 NTSC) - heap-allocated to avoid stack overflow
     pub framebuffer: Box<[u32; 256 * 224]>, // 32-bit ARGB pixels
@@ -86,6 +87,9 @@ pub struct PPU {
     // VRAM Address Pointer
     pub vram_addr: u16,              // Current VRAM address
     pub vram_addr_high: bool,        // Address increment select
+    
+    // CGRAM Address Pointer
+    pub cgram_addr: u16,             // Current CGRAM address (byte offset)
     
     // Temporary registers
     pub temp_x: u16,
@@ -100,8 +104,8 @@ impl PPU {
             cgram: [0; 512],
             
             control: PPUControl {
-                forced_blank: true,
-                brightness: 0,
+                forced_blank: false,  // Enable display rendering
+                brightness: 15,       // Maximum brightness
                 obj_size: 0,
                 obj_addr: 0,
             },
@@ -123,11 +127,14 @@ impl PPU {
             field: false,
             vblank: false,
             hblank: false,
+            nmi_pending: false,
             
             framebuffer: Box::new([0; 256 * 224]),
             
             vram_addr: 0,
             vram_addr_high: false,
+            
+            cgram_addr: 0,
             
             temp_x: 0,
             temp_y: 0,
@@ -596,8 +603,13 @@ impl PPU {
             // Start of scanline
             self.hblank = false;
         } else if self.cycle == 1096 {
-            // H-blank starts
+            // H-blank starts - this is when we render the scanline
             self.hblank = true;
+            
+            // Render scanline during H-blank (scanlines 0-223 are visible)
+            if self.scanline < 224 {
+                self.render_scanline();
+            }
         }
         
         // Advance cycle
@@ -609,10 +621,13 @@ impl PPU {
             // V-blank period: scanlines 225-261
             if self.scanline == 225 {
                 self.vblank = true;
-                // NMI would be triggered here
+                // Set NMI pending flag at start of vblank (scanline 225)
+                // The CPU will handle this interrupt on next instruction boundary
+                self.nmi_pending = true;
             } else if self.scanline == 262 {
                 self.scanline = 0;
                 self.vblank = false;
+                self.nmi_pending = false; // Clear NMI at end of vblank
                 self.field = !self.field;
             }
         }
@@ -644,89 +659,43 @@ impl PPU {
         }
         
         let y = self.scanline;
-        let sprite_size = self.get_sprite_size();
         
-        // Pre-process sprites on this scanline to avoid repeated lookups
-        let mut active_sprites: Vec<(u8, SpriteEntry)> = Vec::new();
-        for sprite_num in 0..128 {
-            let sprite = self.parse_oam_entry(sprite_num);
-            
-            // Check if sprite is visible on this scanline
-            // Y coordinate wraps at 256
-            let sprite_y_wrapped = sprite.y.wrapping_add(1) & 0xFF; // +1 for SNES behavior
-            let sprite_end_y = (sprite_y_wrapped as u16).wrapping_add(sprite_size);
-            
-            // Check if scanline is within sprite Y range
-            if y >= sprite_y_wrapped as u16 && y < sprite_end_y {
-                active_sprites.push((sprite_num, sprite));
-            }
-            
-            if active_sprites.len() >= 32 {
-                break; // SNES hardware limit: max 32 sprites per scanline
-            }
-        }
-        
-        // Render each pixel on this scanline
-        for x in 0..256 {
-            let mut color = 0xFF000000; // Default: black (backdrop)
-            let mut has_bg = false;
-            let mut bg_priority = 0;
-            
-            // Render background layers with priority
-            for bg in 0..4 {
-                let bg_y = (y + self.bg_offset[bg as usize].y) & 0xFFFF;
-                let bg_x = (x as u16 + self.bg_offset[bg as usize].x) & 0xFFFF;
-                
-                let (palette_idx, is_opaque) = self.get_bg_pixel(bg as u8, bg_x, bg_y);
-                
-                if is_opaque {
-                    color = self.get_color(palette_idx as u16);
-                    bg_priority = (palette_idx >> 5) & 0x03;
-                    has_bg = true;
-                    break; // Use first opaque layer (simplified priority)
+        // Try to render the BG based on bg_mode
+        // For now, render mode 0 (4 backgrounds, 2bpp each)
+        match self.bg_mode {
+            0 => {
+                // Mode 0: Render BG0 at minimum
+                for x in 0..256 {
+                    let (color_index, _) = self.get_bg_pixel(0, x as u16, y as u16);
+                    // Read color from CGRAM (palette RAM)
+                    let color_addr = (color_index as usize * 2) & 0x1FF;
+                    let lo = self.cgram[color_addr] as u16;
+                    let hi = self.cgram[color_addr + 1] as u16;
+                    let color555 = (hi << 8) | lo;
+                    // Convert 15-bit RGB to 32-bit ARGB
+                    let r = ((color555 & 0x1F) << 3) as u32;
+                    let g = (((color555 >> 5) & 0x1F) << 3) as u32;
+                    let b = (((color555 >> 10) & 0x1F) << 3) as u32;
+                    let color = 0xFF000000 | (b << 16) | (g << 8) | r;
+                    self.framebuffer[(y as usize * 256) + x] = color;
                 }
             }
-            
-            // Composite sprites over backgrounds
-            // Process sprites in reverse order (higher indices are lower priority)
-            for &(_sprite_num, sprite) in active_sprites.iter().rev() {
-                // Calculate X bounds
-                let sprite_x = (sprite.x as i16) - 128; // Account for offset
-                let sprite_x_end = sprite_x + sprite_size as i16;
-                let pixel_x = x as i16;
-                
-                if pixel_x >= sprite_x && pixel_x < sprite_x_end {
-                    // Calculate Y position within sprite
-                    let sprite_y_wrapped = sprite.y.wrapping_add(1) as i16;
-                    let pix_y = (y as i16 - sprite_y_wrapped) as u16;
-                    
-                    // Calculate X position within sprite
-                    let pix_x = (pixel_x - sprite_x) as u16;
-                    
-                    if let (true, palette_idx) = self.get_sprite_pixel(&sprite, pix_x, pix_y) {
-                        let sprite_color = self.get_color(palette_idx as u16);
-                        let sprite_priority = sprite.priority;
-                        
-                        // Determine if sprite should be rendered on top
-                        // Priority 3 is always on top
-                        // Priority 0-2 respects background priority
-                        let render_sprite = if sprite_priority == 3 {
-                            true
-                        } else if sprite_priority == 2 {
-                            !has_bg || bg_priority == 0
-                        } else {
-                            !has_bg
-                        };
-                        
-                        if render_sprite {
-                            color = sprite_color;
-                            break; // Use first sprite found (topmost)
-                        }
-                    }
+            _ => {
+                // For other modes, render solid color based on mode
+                let color = match self.bg_mode {
+                    1 => 0xFF0000FF, // Red
+                    2 => 0xFF00FF00, // Green
+                    3 => 0xFFFF0000, // Blue
+                    4 => 0xFFFFFF00, // Yellow
+                    5 => 0xFFFF00FF, // Magenta
+                    6 => 0xFF00FFFF, // Cyan
+                    7 => 0xFFFFFFFF, // White
+                    _ => 0xFF808080, // Gray
+                };
+                for x in 0..256 {
+                    self.framebuffer[(y as usize * 256) + x] = color;
                 }
             }
-            
-            self.framebuffer[(y as usize * 256) + x] = color;
         }
     }
     
@@ -789,16 +758,21 @@ impl PPU {
                 self.vram_write(data);
                 self.vram_addr_inc();
             }
-            0x21 => {
-                // OBJSEL - OAM size/address
-                self.control.obj_size = (data >> 5) & 0x07;
-                self.control.obj_addr = ((data as u16) & 0x03) << 8;
+            0x20 => {
+                // CGADD - CGRAM (palette) address (register 0x2120)
+                self.cgram_addr = (data as u16) << 1;  // Address is in palette entries, convert to bytes
             }
             0x22 => {
+                // CGDATA - CGRAM (palette) data write (register 0x2122)
+                let addr = (self.cgram_addr as usize) & 0x1FF;
+                self.cgram[addr] = data;
+                self.cgram_addr = (self.cgram_addr + 1) & 0x1FF;
+            }
+            0x24 => {
                 // OAMADDL - OAM address low
                 // OAM write would happen here
             }
-            0x23 => {
+            0x25 => {
                 // OAMADDH - OAM address high
                 // OAM write would happen here
             }

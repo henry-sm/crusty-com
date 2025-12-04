@@ -66,12 +66,14 @@ impl RomMapper {
 
     /// Detect ROM type from header information
     fn detect_rom_type(map_mode: u8, _rom_data: &[u8]) -> RomType {
-        // Map mode byte high nibble determines bank layout
+        // Map mode byte structure:
+        // High nibble: various features
+        // Low nibble: determines bank layout
         let bank_layout = map_mode & 0x0F;
 
         match bank_layout {
-            0x00..=0x04 => {
-                // LoROM variants
+            0x00..=0x04 | 0x08 | 0x09 => {
+                // LoROM variants (0x00-0x04, and also 0x08-0x09 for some games)
                 RomType::LoRom
             }
             0x05 => {
@@ -185,6 +187,7 @@ impl RomMapper {
         // LoROM memory map:
         // Banks 00-3F, 80-BF, addresses 0x8000-0xFFFF: ROM
         // Banks 40-7D, C0-FF, addresses 0x0000-0xFFFF: ROM (extended)
+        // Banks 00-3F, addresses 0x0000-0x7FFF: Can contain ROM (headers, code in some games)
 
         match (bank, offset) {
             // Standard ROM region (Banks 00-3F and 80-BF)
@@ -212,6 +215,18 @@ impl RomMapper {
             (0xC0..=0xFF, _) => {
                 // Banks C0-FF are mirror of 40-7D for some mappers
                 let rom_offset = ((bank as usize - 0xC0) * 0x10000) + 0x200000 + (offset as usize);
+                if rom_offset < self.rom_size {
+                    Some(rom_offset)
+                } else {
+                    None
+                }
+            }
+
+            // LoROM low address space (Banks 00-3F, addresses 0x0000-0x7FFF)
+            // Some games store code/headers here (e.g., Chrono Trigger stores reset vector at 0x7FFC)
+            (0x00..=0x3F, 0x0000..=0x7FFF) => {
+                // Map to ROM as if it were in the first half of the standard ROM bank
+                let rom_offset = ((bank & 0x3F) as usize * 0x8000) + (offset as usize);
                 if rom_offset < self.rom_size {
                     Some(rom_offset)
                 } else {

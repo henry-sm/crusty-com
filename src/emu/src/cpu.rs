@@ -641,6 +641,15 @@ impl _65816 {
         self.pc = self.pop_16(bus).wrapping_add(1);
     }
 
+    fn rtl(&mut self, bus: &Bus) {
+        // RTL - Return from Long Subroutine (24-bit)
+        // Pops a 24-bit address: first pop gets PC (low 16 bits), then pop again gets K (high 8 bits)
+        let pc = self.pop_16(bus);
+        let k = self.pop_8(bus);
+        self.pc = pc.wrapping_add(1);
+        self.k = k;
+    }
+
     fn rti(&mut self, bus: &Bus) {
         self.p = self.pop_8(bus);
         self.pc = self.pop_16(bus);
@@ -698,6 +707,34 @@ impl _65816 {
         let low = val as u8;
         self.push_byte(bus, high);
         self.push_byte(bus, low);
+    }
+
+    // --- Opcode Disassembly (for debugging) ---
+    pub fn disassemble_opcode(opcode: u8) -> &'static str {
+        match opcode {
+            0x00 => "BRK",
+            0x0A => "ASL",
+            0x0B => "PHD",
+            0x20 => "JSR",
+            0x22 => "JSL",
+            0x2B => "PLD",
+            0x30 => "BMI",
+            0x4C => "JMP",
+            0x5C => "JML",
+            0x60 => "RTS",
+            0x6B => "RTL",
+            0x80 => "BRA",
+            0x8D => "STA",
+            0x8F => "STA long",
+            0xAA => "TAX",
+            0xB0 => "BCS",
+            0xBF => "LDA long,X",
+            0xD0 => "BNE",
+            0xE2 => "SEP",
+            0xEB => "XBA",
+            0xF0 => "BEQ",
+            _ => "???",
+        }
     }
 
     fn handle_nmi(&mut self, bus: &mut Bus) {
@@ -951,6 +988,9 @@ impl _65816 {
             // RTI - Return from Interrupt
             0x40 => self.rti(bus),
 
+            // RTL - Return from Long Subroutine
+            0x6B => self.rtl(bus),
+
             // RTS - Return from Subroutine
             0x60 => self.rts(bus),
 
@@ -1015,6 +1055,12 @@ impl _65816 {
 
             // Unimplemented opcode
             _ => { /* Unimplemented opcode, do nothing for now */ self.cycles += 2; }
+        }
+        
+        // PPU ticks 6 times per CPU cycle (SNES PPU runs at 21.477 MHz vs CPU 3.58 MHz)
+        // This is the main clock relationship in SNES hardware
+        for _ in 0..6 {
+            bus.ppu.tick();
         }
         
         // APU ticks at approximately 1/21 the speed of the CPU

@@ -14,6 +14,8 @@ pub struct EmuState {
     pub cpu: _65816,
     pub bus: Bus,
     pub running: bool,
+    pub total_cycles: u64,
+    pub frame_count: u64,
 }
 
 #[derive(Default)]
@@ -27,6 +29,8 @@ impl Default for EmuState {
             cpu: _65816::new(),
             bus: Bus::new(),
             running: false,
+            total_cycles: 0,
+            frame_count: 0,
         }
     }
 }
@@ -44,7 +48,10 @@ fn get_status() -> String {
 
 #[tauri::command]
 fn load_rom(path: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    use std::io::{self, Write};
+    
     println!("Loading ROM from: {}", path);
+    let _ = io::stdout().flush();
     
     let mut emu_state = state.emulator.lock().unwrap();
     
@@ -52,8 +59,24 @@ fn load_rom(path: String, state: tauri::State<'_, AppState>) -> Result<String, S
     match emu_state.bus.cart.load_rom(&path) {
         Ok(_) => {
             println!("ROM loaded successfully");
+            let _ = io::stdout().flush();
+            
+            // Read reset vector from cartridge to initialize CPU
+            let vector_lo = emu_state.bus.read(0x00, 0xFFFC) as u16;
+            let vector_hi = emu_state.bus.read(0x00, 0xFFFD) as u16;
+            eprintln!("[DEBUG] Vector bytes: lo=0x{:02X}, hi=0x{:02X}", vector_lo, vector_hi);
+            let _ = io::stderr().flush();
+            
+            let reset_pc = (vector_hi << 8) | vector_lo;
+            emu_state.cpu.pc = reset_pc;
+            eprintln!("CPU reset: PC set to ${:04X}", reset_pc);
+            println!("CPU reset: PC set to ${:04X}", reset_pc);
+            let _ = io::stdout().flush();
+            let _ = io::stderr().flush();
+            
             emu_state.running = true;
             println!("Starting emulation loop...");
+            let _ = io::stdout().flush();
             Ok(format!("ROM loaded: {}", path))
         }
         Err(e) => {
@@ -66,6 +89,15 @@ fn load_rom(path: String, state: tauri::State<'_, AppState>) -> Result<String, S
 #[tauri::command]
 fn get_frame(state: tauri::State<'_, AppState>) -> Vec<u32> {
     let emu = state.emulator.lock().unwrap();
+    // Log diagnostics every 10 frames (~600ms)
+    if emu.frame_count % 10 == 0 && emu.frame_count > 0 {
+        eprintln!("[GUI] Frame {}: {} cycles, CPU PC=0x{:04X}, VRAM filled: {} bytes", 
+            emu.frame_count, 
+            emu.total_cycles,
+            emu.cpu.pc,
+            emu.bus.ppu.vram.iter().filter(|b| **b != 0).count()
+        );
+    }
     // Convert Box<[u32; 57344]> to Vec<u32>
     emu.bus.ppu.framebuffer.to_vec()
 }
@@ -107,7 +139,18 @@ pub fn run() {
                             (*cpu_ptr).tick(&mut *bus_ptr);
                         }
                     }
-                    println!("Frame rendered");
+                    emu_guard.total_cycles += 88657;
+                    emu_guard.frame_count += 1;
+                    
+                    // Every 100 frames, log VRAM status
+                    if emu_guard.frame_count % 100 == 0 {
+                        eprintln!("[EMU] Frame {}: PC=0x{:04X}, total_cycles={}, VRAM non-zero bytes: {}", 
+                            emu_guard.frame_count,
+                            emu_guard.cpu.pc,
+                            emu_guard.total_cycles,
+                            emu_guard.bus.ppu.vram.iter().filter(|b| **b != 0).count()
+                        );
+                    }
                 }
             } // Lock is released here
             

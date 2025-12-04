@@ -49,4 +49,9 @@ impl Cartridge {
     pub fn get_mapper(&self) -> Option<&RomMapper> {
         self.mapper.as_ref()
     }
+    
+    /// Get the ROM data (for debugging)
+    pub fn get_rom_data(&self) -> &[u8] {
+        &self.rom
+    }
 }
