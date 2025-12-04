@@ -773,10 +773,16 @@ impl _65816 {
     }
 
     pub fn tick(&mut self, bus: &mut Bus) {
-        // Handle interrupts at the start of each cycle
+        // Check for NMI from PPU and copy to CPU
+        if bus.ppu.nmi_pending {
+            self.nmi_pending = true;
+        }
+        
+        // Handle interrupts at the start of each instruction
         if self.nmi_pending {
             self.handle_nmi(bus);
             self.nmi_pending = false;
+            bus.ppu.nmi_pending = false;  // Also clear PPU flag
         } else if self.irq_pending {
             self.handle_irq(bus);
             self.irq_pending = false;

@@ -11,6 +11,7 @@ pub struct Bus {
     pub cart: Cartridge,
     pub input: Input,
     pub dma: DMAController,
+    pub cpu_io_registers: [u8; 0x10],  // CPU I/O registers 0x4200-0x420F
 }
 
 impl Bus {
@@ -29,6 +30,7 @@ impl Bus {
             cart: Cartridge::new(),
             input: Input::new(),
             dma: DMAController::new(),
+            cpu_io_registers: [0; 0x10],
         }
     }
 
@@ -51,7 +53,7 @@ impl Bus {
             
             // CPU I/O Registers (Banks 00-3F and 80-BF, addresses 4200-42FF)
             (0x00..=0x3F, 0x4200..=0x42FF) | (0x80..=0xBF, 0x4200..=0x42FF) => {
-                // CPU I/O registers: interrupt control, NMI, etc.
+                // CPU I/O registers: interrupt control, NMI, DMA, etc.
                 // 4200 = NMITIMEN (NMI/Timer enable)
                 // 4201 = WRIO (Joypad/programmable I/O port)
                 // 4202-4203 = WRMPYA/B (Multiplication operands)
@@ -60,10 +62,13 @@ impl Bus {
                 // 420A-420B = MDMAEN, HDMAEN (DMA/HDMA enable)
                 // 4212 = HVBJOY (H/V-Blank flag and Joypad Busy flag) - READ ONLY
                 // 4216-4219 = Joypad data (serial or latched)
-                // 420C-420F = ROI, ROLD, etc.
                 match addr {
+                    0x4200..=0x420F => {
+                        // Read from CPU I/O registers
+                        self.cpu_io_registers[(addr - 0x4200) as usize]
+                    }
                     0x4212 => {
-                        // HVBJOY - H/V-Blank flag and Joypad Busy flag
+                        // HVBJOY - H/V-Blank flag and Joypad Busy flag (READ ONLY)
                         // Bit 7: V-Blank Period Flag (0=No, 1=VBlank)
                         // Bit 6: H-Blank Period Flag (0=No, 1=HBlank)
                         // Bits 5-1: Not used
@@ -75,7 +80,7 @@ impl Bus {
                     }
                     0x4217 => self.input.read_serial(), // Joypad data (serial)
                     0x4218..=0x4219 => self.input.read_buttons(), // Joypad data (latched)
-                    _ => 0 // TODO: implement other I/O register reads
+                    _ => 0 // Other I/O registers
                 }
             }
             
@@ -132,48 +137,38 @@ impl Bus {
             (0x00..=0x3F, 0x4200..=0x42FF) | (0x80..=0xBF, 0x4200..=0x42FF) => {
                 // CPU I/O registers write handling
                 match addr {
+                    0x420A => {
+                        // MDMAEN (Master DMA Enable)
+                        // Each bit enables a DMA channel
+                        self.cpu_io_registers[(addr - 0x4200) as usize] = data;
+                        
+                        // Execute DMA immediately when any bit is set
+                        if data != 0 {
+                            self.dma.dma_enabled = true;
+                            
+                            // Enable individual channels based on bits
+                            for channel_idx in 0..8 {
+                                if (data & (1 << channel_idx)) != 0 {
+                                    self.dma.write_register(0x4300 + (channel_idx as u16) * 16, 
+                                        self.dma.read_register(0x4300 + (channel_idx as u16) * 16) | 0x80);
+                                }
+                            }
+                            
+                            // Execute DMA - we'll handle the PPU write through register writes
+                            self.execute_dma_transfer();
+                        }
+                    }
+                    0x4200..=0x420F => {
+                        // Store in cpu_io_registers array
+                        self.cpu_io_registers[(addr - 0x4200) as usize] = data;
+                    }
                     0x4016 => {
                         // JOYSER0 - Joypad strobe
                         self.input.write_strobe(data);
                     }
-                    0x4200 => {
-                        // NMITIMEN - NMI/Timer enable
-                        // Bit 7: NMI enable
-                        // Bit 4: H-timer enable
-                        // Bit 3: V-timer enable
-                        // Bits 0-1: Timer frequency
-                        // TODO: implement timer control
+                    _ => {
+                        // Other I/O registers (not implemented)
                     }
-                    0x4201 => {
-                        // WRIO - Joypad output port / programmable I/O port
-                        // TODO: implement
-                    }
-                    0x4202..=0x4203 => {
-                        // WRMPYA/B - Multiplication operands
-                        // TODO: implement multiplication
-                    }
-                    0x4204..=0x4206 => {
-                        // WRDIVL/H, WRDIVB - Division operands
-                        // TODO: implement division
-                    }
-                    0x4207..=0x4209 => {
-                        // HTIMEL/H, VTIMEL - H/V timer settings
-                        // TODO: implement timer settings
-                    }
-                    0x420A => {
-                        // MDMAEN - DMA enable register (0x420C in some docs)
-                        // Bits 0-7: Enable DMA channels 0-7
-                        // SOURCE: No$SNS 0x420C documentation
-                        self.dma.set_dma_enabled(data != 0);
-                        // TODO: Execute DMA transfer when triggered
-                    }
-                    0x420B => {
-                        // HDMAEN - HDMA enable register
-                        // Bits 0-7: Enable HDMA channels 0-7
-                        // SOURCE: No$SNS 0x420D documentation
-                        self.dma.set_hdma_enabled(data);
-                    }
-                    _ => {} // Other I/O registers ignored for now
                 }
             }
             
@@ -202,6 +197,58 @@ impl Bus {
             // Unmapped memory writes are ignored
             _ => {}
         }
+    }
+    
+    // Execute DMA transfer for all enabled channels
+    fn execute_dma_transfer(&mut self) {
+        // We need to manually iterate through channels and transfer data
+        // since we can't easily pass closure with mutable PPU reference
+        
+        // For now, implement a simplified DMA that writes to PPU registers
+        // We'll handle this by directly manipulating the PPU state
+        
+        for channel_idx in 0..8 {
+            // Read channel configuration
+            let channel_addr = 0x4300 + (channel_idx as u16) * 16;
+            
+            // Check if channel is enabled
+            let control = self.dma.read_register(channel_addr);
+            if (control & 0x80) == 0 {
+                continue; // Channel not enabled
+            }
+            
+            let dest = self.dma.read_register(channel_addr + 1);
+            let src_low = self.dma.read_register(channel_addr + 2) as u32;
+            let src_mid = self.dma.read_register(channel_addr + 3) as u32;
+            let src_bank = self.dma.read_register(channel_addr + 4) as u32;
+            let size_low = self.dma.read_register(channel_addr + 5) as u16;
+            let size_high = self.dma.read_register(channel_addr + 6) as u16;
+            
+            let source_addr = (src_bank << 16) | (src_mid << 8) | src_low;
+            let transfer_size = if size_low == 0 && size_high == 0 { 
+                0x10000u32 
+            } else { 
+                ((size_high as u32) << 8) | (size_low as u32)
+            };
+            
+            // For MODE 0 (most common), write to single PPU register
+            for i in 0..transfer_size {
+                let addr = (source_addr + i) as usize;
+                let data = if addr < self.ram.len() {
+                    self.ram[addr]
+                } else {
+                    0
+                };
+                
+                // Write to PPU register via proper channel
+                self.ppu.write_register(dest, data);
+            }
+            
+            // Clear the enable bit for this channel
+            self.dma.write_register(channel_addr, control & 0x7F);
+        }
+        
+        self.dma.dma_enabled = false;
     }
     
     // Trigger NMI interrupt (from PPU V-blank)
