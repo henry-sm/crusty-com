@@ -51,6 +51,7 @@ async function initApp() {
 
     const { invoke } = window.__TAURI__.core;
     const { open } = window.__TAURI__.dialog;
+    const { listen } = window.__TAURI__.event;
 
     const canvas = document.getElementById('screen');
     const ctx = canvas.getContext('2d');
@@ -59,6 +60,11 @@ async function initApp() {
 
     logToStatus("Canvas initialized");
     logToStatus("Load ROM button ready");
+
+    // Listen for log messages from the backend
+    listen('log-message', (event) => {
+        logToStatus(event.payload);
+    });
 
 
     // Keymap: keyboard key -> SNES button bit
