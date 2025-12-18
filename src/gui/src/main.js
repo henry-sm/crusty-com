@@ -61,11 +61,62 @@ async function initApp() {
     logToStatus("Canvas initialized");
     logToStatus("Load ROM button ready");
 
+    // Initialize Web Audio API for sound playback
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const audioBuffer = [];
+    const audioSampleRate = 32000;  // Match APU sample rate
+    let audioSource = null;
+    
+    logToStatus(`Audio context initialized: sample rate ${audioContext.sampleRate}Hz`);
+    
+    // Function to queue audio samples for playback
+    async function playAudio() {
+        while (true) {
+            try {
+                const samples = await invoke('get_audio');
+                if (samples && samples.length > 0) {
+                    // Queue audio data
+                    audioBuffer.push(...samples);
+                    
+                    // If we have enough samples, create and play an audio buffer
+                    if (audioBuffer.length > audioSampleRate * 0.05) {  // 50ms of audio
+                        const audioData = audioBuffer.splice(0, audioSampleRate * 0.05);
+                        
+                        // Create audio buffer
+                        const length = audioData.length / 2;  // Stereo
+                        const abuf = audioContext.createBuffer(2, length, audioSampleRate);
+                        const leftChannel = abuf.getChannelData(0);
+                        const rightChannel = abuf.getChannelData(1);
+                        
+                        // Fill channels (convert i16 to float)
+                        for (let i = 0; i < length; i++) {
+                            leftChannel[i] = audioData[i * 2] / 32768.0;
+                            rightChannel[i] = audioData[i * 2 + 1] / 32768.0;
+                        }
+                        
+                        // Play the buffer
+                        audioSource = audioContext.createBufferSource();
+                        audioSource.buffer = abuf;
+                        audioSource.connect(audioContext.destination);
+                        audioSource.start(0);
+                    }
+                }
+            } catch (e) {
+                // Silently ignore audio errors
+            }
+            
+            // Check audio every 16ms
+            await new Promise(resolve => setTimeout(resolve, 16));
+        }
+    }
+    
+    // Start audio playback thread (non-blocking)
+    playAudio();
+
     // Listen for log messages from the backend
     listen('log-message', (event) => {
         logToStatus(event.payload);
     });
-
 
     // Keymap: keyboard key -> SNES button bit
     // Bit positions: 0=Right, 1=Left, 2=Down, 3=Up, 4=START, 5=SELECT, 6=Y, 7=B

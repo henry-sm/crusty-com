@@ -114,6 +114,12 @@ fn save_sram(state: tauri::State<'_, AppState>) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn get_audio(state: tauri::State<'_, AppState>) -> Vec<i16> {
+    let mut emu = state.emulator.lock().unwrap();
+    emu.bus.apu.get_audio_samples()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Create emulator state in a dedicated thread to avoid stack overflow
@@ -184,7 +190,8 @@ pub fn run() {
             get_frame, 
             press_button, 
             release_button,
-            save_sram
+            save_sram,
+            get_audio
         ])
         .build(tauri::generate_context!()) {
             Ok(app) => {

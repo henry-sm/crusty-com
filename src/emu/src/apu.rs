@@ -1,3 +1,130 @@
+// Voice Channel State
+#[derive(Clone, Copy, Debug)]
+pub struct Voice {
+    pub left_vol: i8,           // Left volume (-128..127)
+    pub right_vol: i8,          // Right volume (-128..127)
+    pub pitch: u16,             // Pitch (0x0000-0xFFFF)
+    pub srcn: u8,               // Sample number
+    pub adsr1: u8,              // ADSR1 register
+    pub adsr2: u8,              // ADSR2 register
+    pub gain: u8,               // Gain register
+    pub envx: u16,              // Envelope value
+    pub outx: i8,               // Last output value
+    pub enabled: bool,          // Voice enabled
+    pub current_sample_idx: u16, // Position in current sample
+    pub fraction: u16,          // Fractional sample position
+    pub brr_header: u8,         // Current BRR block header
+    pub brr_buffer: [i16; 16],  // Decoded BRR samples
+    pub prev_sample: i16,       // Previous sample for interpolation
+}
+
+impl Voice {
+    pub fn new() -> Self {
+        Voice {
+            left_vol: 0,
+            right_vol: 0,
+            pitch: 0,
+            srcn: 0,
+            adsr1: 0,
+            adsr2: 0,
+            gain: 0,
+            envx: 0,
+            outx: 0,
+            enabled: false,
+            current_sample_idx: 0,
+            fraction: 0,
+            brr_header: 0,
+            brr_buffer: [0; 16],
+            prev_sample: 0,
+        }
+    }
+
+    /// Decode a BRR block (16 bytes) into 16 PCM samples
+    /// BRR (Bit Rate Reduction) is the SNES sample compression format
+    pub fn decode_brr_block(&mut self, data: &[u8]) {
+        if data.len() < 9 {
+            return;
+        }
+
+        self.brr_header = data[0];
+        let filter = (self.brr_header >> 2) & 0x03;
+        let shift = (self.brr_header >> 4) & 0x0F;
+
+        // Decode 16 4-bit nibbles into 16 samples
+        for i in 0..16 {
+            let byte_idx = 1 + i / 2;
+            let nibble = if i % 2 == 0 {
+                (data[byte_idx] >> 4) & 0x0F
+            } else {
+                data[byte_idx] & 0x0F
+            };
+
+            // Sign-extend 4-bit nibble to i16
+            let signed: i16 = if (nibble & 0x08) != 0 {
+                (((nibble as i16) | (-16i16)) << 1)
+            } else {
+                (nibble as i16) << 1
+            };
+
+            // Apply shift
+            let shifted = signed << shift;
+
+            // Apply filter (prediction)
+            let sample = match filter {
+                0 => shifted,
+                1 => {
+                    // Simple delta-PCM
+                    shifted + (self.brr_buffer[(i as i32 - 1).max(0) as usize] >> 1)
+                }
+                2 => {
+                    // Two-tap filter
+                    let s1 = self.brr_buffer[(i as i32 - 1).max(0) as usize];
+                    let s2 = self.brr_buffer[(i as i32 - 2).max(0) as usize];
+                    shifted + (s1 * 61 >> 6) - (s2 * 15 >> 4)
+                }
+                3 => {
+                    // Three-tap filter
+                    let s1 = self.brr_buffer[(i as i32 - 1).max(0) as usize];
+                    let s2 = self.brr_buffer[(i as i32 - 2).max(0) as usize];
+                    shifted + (s1 * 115 >> 7) - (s2 * 13 >> 4)
+                }
+                _ => shifted,
+            };
+
+            // Clamp to i16 range
+            let clamped = sample.max(-32768).min(32767);
+            self.brr_buffer[i] = clamped;
+        }
+    }
+
+    // Update ADSR envelope
+    pub fn update_envelope(&mut self) {
+        if self.adsr1 & 0x80 != 0 {
+            // ADSR mode
+            let ar = (self.adsr1 >> 4) & 0x0F;  // Attack rate
+            let dr = (self.adsr1 >> 0) & 0x0F;  // Decay rate
+            let sl = (self.adsr2 >> 5) & 0x07;  // Sustain level
+            let sr = (self.adsr2 >> 0) & 0x1F;  // Sustain rate
+            
+            // Simple envelope: ramp up on attack, down on decay, hold at sustain
+            if self.envx < 0x7FFF {
+                let rate = if self.envx < ((sl as u16) << 11) {
+                    ar + 1
+                } else if self.envx > ((sl as u16) << 11) {
+                    dr + 1
+                } else {
+                    sr + 1
+                };
+                self.envx = self.envx.saturating_add(rate as u16 * 8);
+            }
+        } else {
+            // Gain mode - direct envelope value
+            self.envx = (self.gain & 0x7F) as u16 * 0x80;
+        }
+    }
+}
+
+
 // SPC700 CPU State
 #[derive(Clone)]
 pub struct SPC700 {
@@ -56,24 +183,138 @@ impl SPC700 {
 // DSP State
 #[derive(Clone)]
 pub struct DSP {
-    pub registers: [u8; 128],   // DSP registers (0x00-0x7F)
-    pub output_samples: [i16; 8], // 8 voice outputs
+    pub registers: [u8; 128],       // DSP registers (0x00-0x7F)
+    pub voices: [Voice; 8],         // 8 voice channels
+    pub master_vol_left: i8,        // Main volume left
+    pub master_vol_right: i8,       // Main volume right
+    pub echo_vol_left: i8,          // Echo volume left
+    pub echo_vol_right: i8,         // Echo volume right
+    pub echo_buffer: Vec<i16>,      // Echo/reverb buffer (up to 15.5 KB)
+    pub echo_buffer_pos: usize,     // Current position in echo buffer
+    pub echo_enabled: bool,         // Echo enable flag
+    pub noise_counter: u16,         // Noise generator counter
+    pub output_buffer: Vec<i16>,    // Audio output buffer (stereo: L, R, L, R, ...)
+    pub sample_rate: u32,           // Sample rate (typically 32000 Hz for SPC700 at 2.048 MHz)
 }
 
 impl DSP {
     pub fn new() -> Self {
         DSP {
             registers: [0; 128],
-            output_samples: [0; 8],
+            voices: [Voice::new(); 8],
+            master_vol_left: 0,
+            master_vol_right: 0,
+            echo_vol_left: 0,
+            echo_vol_right: 0,
+            echo_buffer: vec![0; 8192],  // 15.5 KB echo buffer
+            echo_buffer_pos: 0,
+            echo_enabled: false,
+            noise_counter: 0,
+            output_buffer: Vec::with_capacity(32000),  // ~1 second at 32kHz
+            sample_rate: 32000,
         }
     }
     
     pub fn read_register(&self, addr: u8) -> u8 {
-        self.registers[(addr & 0x7F) as usize]
+        match addr & 0x7F {
+            // Voice registers: 00-6F (8 voices, 16 registers each)
+            0x00..=0x6F => {
+                let voice_idx = addr as usize / 16;
+                let reg = addr as usize % 16;
+                match reg {
+                    0x0 => self.voices[voice_idx].left_vol as u8,
+                    0x1 => self.voices[voice_idx].right_vol as u8,
+                    0x2 => (self.voices[voice_idx].pitch & 0xFF) as u8,
+                    0x3 => ((self.voices[voice_idx].pitch >> 8) & 0x3F) as u8,
+                    0x4 => self.voices[voice_idx].srcn,
+                    0x5 => self.voices[voice_idx].adsr1,
+                    0x6 => self.voices[voice_idx].adsr2,
+                    0x7 => self.voices[voice_idx].gain,
+                    0x8 => self.voices[voice_idx].envx as u8,
+                    0x9 => self.voices[voice_idx].outx as u8,
+                    _ => self.registers[(addr & 0x7F) as usize],
+                }
+            }
+            // Master/misc registers: 70-7F
+            0x70 => 0,  // Read-only test register
+            0x71 => 0,  // Control register (read-only)
+            0x72 => 0,  // Echo feedback
+            0x73 => 0,  // Pitch modulation on
+            0x74 => 0,  // Noise on
+            0x75 => 0,  // Echo on
+            0x76 => 0,  // Mute and echo disabled
+            0x77 => 0,  // Noise clock
+            0x78 => 0,  // Echo delay
+            0x79 => 0,  // Echo filter coefficient
+            _ => self.registers[(addr & 0x7F) as usize],
+        }
     }
     
     pub fn write_register(&mut self, addr: u8, val: u8) {
-        self.registers[(addr & 0x7F) as usize] = val;
+        match addr & 0x7F {
+            // Voice registers: 00-6F (8 voices, 16 registers each)
+            0x00..=0x6F => {
+                let voice_idx = addr as usize / 16;
+                let reg = addr as usize % 16;
+                match reg {
+                    0x0 => self.voices[voice_idx].left_vol = val as i8,
+                    0x1 => self.voices[voice_idx].right_vol = val as i8,
+                    0x2 => self.voices[voice_idx].pitch = (self.voices[voice_idx].pitch & 0xFF00) | (val as u16),
+                    0x3 => self.voices[voice_idx].pitch = (self.voices[voice_idx].pitch & 0x00FF) | (((val & 0x3F) as u16) << 8),
+                    0x4 => self.voices[voice_idx].srcn = val,
+                    0x5 => self.voices[voice_idx].adsr1 = val,
+                    0x6 => self.voices[voice_idx].adsr2 = val,
+                    0x7 => self.voices[voice_idx].gain = val,
+                    0x8 => self.voices[voice_idx].envx = (val as u16) << 8,
+                    0x9 => self.voices[voice_idx].outx = val as i8,
+                    _ => self.registers[(addr & 0x7F) as usize] = val,
+                }
+            }
+            // Master/misc registers: 70-7F
+            0x70 => {
+                // Test register - can reset various things
+                // Not typically written by games
+            }
+            0x71 => {
+                // Control register
+                // Bit 7: Init (1 = reset DSP)
+                // Bit 6-4: ROM disable
+                // Bit 3: Clear echo buffer
+                // Bit 2: Mute
+                // Bit 1: Echo disabled
+                // Bit 0: Sound disabled
+            }
+            0x72 => {
+                // Echo feedback (unused in basic implementation)
+            }
+            0x73 => {
+                // Pitch modulation enable (8 bits, one per voice)
+            }
+            0x74 => {
+                // Noise on (8 bits, one per voice)
+            }
+            0x75 => {
+                // Echo on (8 bits, one per voice)
+                self.echo_enabled = (val & 0xFF) != 0;
+            }
+            0x76 => {
+                // Mute and echo disabled
+            }
+            0x77 => {
+                // Noise clock
+            }
+            0x78 => {
+                // Echo delay (in 2048-sample units)
+            }
+            0x79 => {
+                // Echo filter coefficient
+            }
+            0x7A..=0x7F => {
+                // Echo filter coefficients
+                self.registers[(addr & 0x7F) as usize] = val;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -82,6 +323,8 @@ pub struct APU {
     pub dsp: DSP,
     pub ram: [u8; 65536],           // 64KB APU RAM
     pub cycles: u32,                // Cycle counter for sync
+    pub sample_counter: u32,        // Counter for sample generation
+    pub samples_per_update: u32,    // How many CPU cycles per audio sample
 }
 
 impl APU {
@@ -91,6 +334,8 @@ impl APU {
             dsp: DSP::new(),
             ram: [0; 65536],
             cycles: 0,
+            sample_counter: 0,
+            samples_per_update: 64,  // SPC700 runs at ~2.048 MHz, output at ~32 kHz = 64 cycles per sample
         }
     }
     
@@ -98,12 +343,73 @@ impl APU {
         // Execute one SPC700 instruction
         self.execute_instruction();
         
-        // Update DSP (runs at 1/64 of CPU speed typically)
+        // Accumulate cycles
         self.cycles += 1;
-        if self.cycles >= 64 {
-            self.cycles = 0;
+        self.sample_counter += 1;
+        
+        // Generate audio sample every N cycles
+        if self.sample_counter >= self.samples_per_update {
+            self.sample_counter = 0;
             self.dsp_update();
         }
+    }
+    
+    /// Generate audio samples from current voice states
+    fn dsp_update(&mut self) {
+        let mut left_out: i32 = 0;
+        let mut right_out: i32 = 0;
+        
+        // Process all 8 voices
+        for voice_idx in 0..8 {
+            let voice = &mut self.dsp.voices[voice_idx];
+            
+            if !voice.enabled || voice.envx == 0 {
+                continue;
+            }
+            
+            // Update envelope
+            voice.update_envelope();
+            
+            // Get sample from voice's current position
+            let sample = voice.brr_buffer[0];  // Simplified - would interpolate normally
+            
+            // Apply envelope and volume
+            let envelope_level = (voice.envx >> 8) as i32;  // 0-255
+            let left_level = (voice.left_vol as i32) * envelope_level / 255;
+            let right_level = (voice.right_vol as i32) * envelope_level / 255;
+            
+            left_out += (sample as i32) * left_level / 128;
+            right_out += (sample as i32) * right_level / 128;
+        }
+        
+        // Apply master volume
+        left_out = left_out * (self.dsp.master_vol_left as i32) / 128;
+        right_out = right_out * (self.dsp.master_vol_right as i32) / 128;
+        
+        // Clamp to i16 range
+        left_out = left_out.max(-32768).min(32767);
+        right_out = right_out.max(-32768).min(32767);
+        
+        // Add to output buffer
+        self.dsp.output_buffer.push(left_out as i16);
+        self.dsp.output_buffer.push(right_out as i16);
+        
+        // Keep buffer reasonably sized (about 1 second of audio)
+        if self.dsp.output_buffer.len() > self.dsp.sample_rate as usize * 2 {
+            self.dsp.output_buffer.drain(0..std::cmp::min(1024, self.dsp.output_buffer.len() / 2));
+        }
+    }
+    
+    /// Get audio samples from buffer (and remove them)
+    pub fn get_audio_samples(&mut self) -> Vec<i16> {
+        let samples = self.dsp.output_buffer.clone();
+        self.dsp.output_buffer.clear();
+        samples
+    }
+    
+    /// Return audio buffer size
+    pub fn audio_buffer_len(&self) -> usize {
+        self.dsp.output_buffer.len()
     }
     
     fn execute_instruction(&mut self) {
@@ -368,17 +674,49 @@ impl APU {
         self.spc700.z = val == 0;
     }
     
-    fn dsp_update(&mut self) {
-        // DSP processing - generates audio samples
-        // This is where BRR decoding, ADSR, interpolation happens
-        // For now, just a placeholder
-    }
-    
     pub fn read_ram(&self, addr: u16) -> u8 {
         self.ram[addr as usize]
     }
     
     pub fn write_ram(&mut self, addr: u16, val: u8) {
         self.ram[addr as usize] = val;
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_brr_decode_silence() {
+        let mut voice = Voice::new();
+        let brr_block = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        voice.decode_brr_block(&brr_block);
+        for sample in voice.brr_buffer.iter() {
+            assert!(*sample <= 2 && *sample >= -2);
+        }
+    }
+
+    #[test]
+    fn test_envelope_adsr_mode() {
+        let mut voice = Voice::new();
+        voice.adsr1 = 0xEF;
+        voice.adsr2 = 0x00;
+        voice.envx = 0;
+        voice.update_envelope();
+        assert!(voice.envx > 0);
+    }
+
+    #[test]
+    fn test_apu_initialization() {
+        let apu = APU::new();
+        assert_eq!(apu.spc700.pc, 0xFFC0);
+        assert_eq!(apu.spc700.sp, 0xEF);
+    }
+
+    #[test]
+    fn test_dsp_register_read_write() {
+        let mut dsp = DSP::new();
+        dsp.write_register(0x00, 127);
+        assert_eq!(dsp.read_register(0x00), 127);
     }
 }
