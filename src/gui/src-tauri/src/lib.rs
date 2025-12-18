@@ -98,6 +98,22 @@ fn release_button(button: u8, state: tauri::State<'_, AppState>) -> Result<(), S
     Ok(())
 }
 
+#[tauri::command]
+fn save_sram(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let emu = state.emulator.lock().unwrap();
+    match emu.bus.cart.save_sram() {
+        Ok(_) => {
+            emit_log("SRAM saved successfully");
+            Ok("SRAM saved".to_string())
+        }
+        Err(e) => {
+            let err_msg = format!("Failed to save SRAM: {}", e);
+            emit_log(&err_msg);
+            Err(err_msg)
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Create emulator state in a dedicated thread to avoid stack overflow
@@ -167,7 +183,8 @@ pub fn run() {
             load_rom, 
             get_frame, 
             press_button, 
-            release_button
+            release_button,
+            save_sram
         ])
         .build(tauri::generate_context!()) {
             Ok(app) => {

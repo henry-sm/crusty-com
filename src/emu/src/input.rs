@@ -1,7 +1,9 @@
 /// Input handling for SNES controller simulation
 /// Maps keyboard input to SNES joypad button states
 
-#[derive(Debug, Clone, Copy)]
+use std::cell::Cell;
+
+#[derive(Debug, Clone)]
 pub struct Input {
     /// Button states as a u8 bitmask
     /// Bit 7: B button
@@ -15,7 +17,8 @@ pub struct Input {
     pub buttons: u8,
     
     /// Shift register for serial joypad protocol (0x4217 reads)
-    shift_register: u8,
+    /// Using Cell for interior mutability since read() takes &self
+    shift_register: Cell<u8>,
     
     /// Strobe state for latching buttons
     strobe_latch: bool,
@@ -25,7 +28,7 @@ impl Input {
     pub fn new() -> Self {
         Input {
             buttons: 0xFF, // All buttons unpressed (inverted logic)
-            shift_register: 0xFF,
+            shift_register: Cell::new(0xFF),
             strobe_latch: false,
         }
     }
@@ -55,7 +58,7 @@ impl Input {
         
         // On falling edge of strobe (1 -> 0), latch button states into shift register
         if self.strobe_latch && !new_strobe {
-            self.shift_register = self.buttons;
+            self.shift_register.set(self.buttons);
         }
         
         self.strobe_latch = new_strobe;
@@ -63,9 +66,14 @@ impl Input {
     
     /// Read joypad data via serial protocol (0x4217)
     /// Returns one bit per read, shifted out in order: B, Y, SEL, STR, Up, Down, Left, Right
+    /// This uses interior mutability to track shift state
     pub fn read_serial(&self) -> u8 {
-        // For now, return buttons directly (serial shifting would require mutable state)
-        self.buttons
+        // Return LSB of shift register, then shift right
+        let current = self.shift_register.get();
+        let bit = (current & 0x01) as u8;
+        let shifted = (current >> 1) | 0x80;  // Fill with 1s from the left (unpressed state)
+        self.shift_register.set(shifted);
+        bit
     }
     
     /// Read latched button state (0x4218/0x4219)

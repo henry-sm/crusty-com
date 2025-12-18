@@ -222,16 +222,11 @@ impl RomMapper {
                 }
             }
 
-            // LoROM low address space (Banks 00-3F, addresses 0x0000-0x7FFF)
-            // Some games store code/headers here (e.g., Chrono Trigger stores reset vector at 0x7FFC)
-            (0x00..=0x3F, 0x0000..=0x7FFF) => {
-                // Map to ROM as if it were in the first half of the standard ROM bank
-                let rom_offset = ((bank & 0x3F) as usize * 0x8000) + (offset as usize);
-                if rom_offset < self.rom_size {
-                    Some(rom_offset)
-                } else {
-                    None
-                }
+            // LoROM low address space (Banks 00-3F and 80-BF, addresses 0x0000-0x7FFF)
+            // This is system RAM region, NOT ROM
+            (0x00..=0x3F, 0x0000..=0x7FFF) | (0x80..=0xBF, 0x0000..=0x7FFF) => {
+                // System RAM region - not directly ROM mapped
+                None
             }
 
             _ => None,
@@ -299,6 +294,64 @@ impl RomMapper {
                     _ => self.translate_lorom(addr),
                 }
             }
+        }
+    }
+
+    /// Translate CPU address to SRAM offset (if applicable)
+    /// SRAM mapping varies by mapper type and game
+    /// Common LoROM SRAM locations: 0x70:0000-0x7D:FFFF (SuperFX), 0xA0-0xBF (standard)
+    /// For simplicity, we support standard LoROM SRAM at 0x70-0x7F (fixed 64KB window)
+    pub fn translate_sram_address(&self, addr: u32) -> Option<usize> {
+        if !self.header.has_sram {
+            return None;
+        }
+
+        let bank = (addr >> 16) as u8;
+        let offset = (addr & 0xFFFF) as u16;
+
+        match self.header.rom_type {
+            RomType::LoRom => {
+                // Standard LoROM SRAM at banks 0x70-0x7F (fixed mapping)
+                // This is the most common location for battery-backed SRAM
+                match bank {
+                    0x70..=0x7D => {
+                        // Each bank is 64KB, but SRAM is typically much smaller
+                        // Map all accesses to the same SRAM space
+                        let sram_offset = (offset as usize) % self.ram_size;
+                        if sram_offset < self.ram_size {
+                            Some(sram_offset)
+                        } else {
+                            None
+                        }
+                    }
+                    // Some games use 0x20-0x3F for SRAM (depends on header flags)
+                    0x20..=0x3F => {
+                        // Alternative SRAM location for some games
+                        let sram_offset = (offset as usize) % self.ram_size;
+                        if sram_offset < self.ram_size {
+                            Some(sram_offset)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            RomType::HiRom => {
+                // HiROM typically uses 0x30-0x3F for SRAM
+                match bank {
+                    0x30..=0x3F => {
+                        let sram_offset = (offset as usize) % self.ram_size;
+                        if sram_offset < self.ram_size {
+                            Some(sram_offset)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 

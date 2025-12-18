@@ -97,6 +97,12 @@ impl Bus {
             // WRAM (Work RAM) Access (Banks 7E-7F, all addresses)
             (0x7E..=0x7F, _) => self.ram[(full_addr - 0x7E0000) as usize],
             
+            // Cartridge SRAM/ROM (Banks 20-3F, 70-7F for LoROM; 30-3F for HiROM)
+            // SRAM takes priority over ROM in these ranges
+            (0x20..=0x3F, _) | (0x70..=0x7F, _) => {
+                self.cart.read(full_addr)
+            }
+            
             // Cartridge ROM (LoROM extended banks 40-7D, addresses 0000-FFFF)
             // ALSO LoROM banks 00-3F, addresses 0000-7FFF (for header/code in some games)
             (0x00..=0x3F, 0x0000..=0x7FFF) | (0x40..=0x7D, 0x0000..=0xFFFF) => {
@@ -182,6 +188,12 @@ impl Bus {
             // WRAM (Work RAM) Access (Banks 7E-7F, all addresses)
             (0x7E..=0x7F, _) => {
                 self.ram[(full_addr - 0x7E0000) as usize] = data;
+            }
+            
+            // Cartridge SRAM Write (Banks 20-3F, 70-7F for LoROM; 30-3F for HiROM)
+            (0x20..=0x3F, _) | (0x70..=0x7F, _) => {
+                // Write to SRAM if applicable
+                self.cart.write(full_addr, data);
             }
             
             // Writing to Cartridge ROM is ignored
