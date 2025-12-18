@@ -11,8 +11,9 @@
     "windows": [
       {
         "title": "Crusty SNES",
-        "width": 560,
-        "height": 580
+        "width": 800,
+        "height": 580,
+        "resizable": true
       }
     ],
     "security": {

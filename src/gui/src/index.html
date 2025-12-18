@@ -8,9 +8,26 @@
 </head>
 <body>
     <main class="container">
-        <h1>Crusty SNES Emulator</h1>
-        <canvas id="screen" width="256" height="224"></canvas>
-        <button id="loadRomBtn">Load ROM</button>
+        <div class="layout">
+            <!-- Left column: ROM display and status -->
+            <div class="left-column">
+                <div class="rom-section">
+                    <canvas id="screen" width="256" height="224"></canvas>
+                    <button id="loadRomBtn">Load ROM</button>
+                </div>
+                <div class="log-section">
+                    <div class="section-header">STATUS & LOG</div>
+                    <div id="statusLog" class="status-content">Ready to load ROM...</div>
+                </div>
+            </div>
+            <!-- Right column: Opcodes -->
+            <div class="right-column">
+                <div class="opcodes-section">
+                    <div class="section-header">OPCODES<br>BEING<br>EXECUTED</div>
+                    <div id="opcodesDisplay" class="opcodes-content"></div>
+                </div>
+            </div>
+        </div>
     </main>
     <script src="./main.js" type="module"></script>
 </body>

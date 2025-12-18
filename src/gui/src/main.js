@@ -1,6 +1,31 @@
 // Wait for Tauri API to be ready
 console.log("main.js loaded");
 
+// Function to log to status panel
+function logToStatus(message) {
+    const statusLog = document.getElementById('statusLog');
+    if (statusLog) {
+        const timestamp = new Date().toLocaleTimeString();
+        statusLog.textContent += `[${timestamp}] ${message}\n`;
+        statusLog.scrollTop = statusLog.scrollHeight;
+    }
+    console.log(message);
+}
+
+// Function to log opcodes to opcodes panel
+function logOpcodes(opcode) {
+    const opcodesDisplay = document.getElementById('opcodesDisplay');
+    if (opcodesDisplay) {
+        opcodesDisplay.textContent += `${opcode}\n`;
+        // Keep only last 50 lines
+        const lines = opcodesDisplay.textContent.split('\n');
+        if (lines.length > 50) {
+            opcodesDisplay.textContent = lines.slice(-50).join('\n');
+        }
+        opcodesDisplay.scrollTop = opcodesDisplay.scrollHeight;
+    }
+}
+
 // Function to wait for Tauri to be ready
 async function waitForTauri() {
     let attempts = 0;
@@ -12,7 +37,7 @@ async function waitForTauri() {
         console.error("Tauri API failed to load!");
         return false;
     }
-    console.log("Tauri API loaded successfully");
+    logToStatus("Tauri API loaded successfully");
     return true;
 }
 
@@ -20,7 +45,7 @@ async function waitForTauri() {
 async function initApp() {
     const isTauriReady = await waitForTauri();
     if (!isTauriReady) {
-        alert("Failed to initialize Tauri API");
+        logToStatus("ERROR: Failed to initialize Tauri API");
         return;
     }
 
@@ -32,8 +57,9 @@ async function initApp() {
     const imageData = ctx.createImageData(256, 224);
     const loadRomBtn = document.getElementById('loadRomBtn');
 
-    console.log("Canvas:", canvas);
-    console.log("Load ROM Button:", loadRomBtn);
+    logToStatus("Canvas initialized");
+    logToStatus("Load ROM button ready");
+
 
     // Keymap: keyboard key -> SNES button bit
     // Bit positions: 0=Right, 1=Left, 2=Down, 3=Up, 4=START, 5=SELECT, 6=Y, 7=B
@@ -63,7 +89,7 @@ async function initApp() {
                     ctx.putImageData(imageData, 0, 0);
                 }
             } catch (e) {
-                console.error(`Frame rendering error: ${e}`);
+                logToStatus(`Frame rendering error: ${e}`);
             }
             
             // ~60 FPS (frame rate matching emulation)
@@ -93,39 +119,36 @@ async function initApp() {
 
     // Handle the "Load ROM" button click
     if (loadRomBtn) {
-        console.log("Attaching click listener to load ROM button");
+        logToStatus("Waiting for ROM load...");
         loadRomBtn.addEventListener('click', async () => {
-            console.log("Load ROM button clicked!");
+            logToStatus("Load ROM button clicked!");
             try {
-                console.log("Opening file dialog...");
+                logToStatus("Opening file dialog...");
                 const romPath = await open({
                     title: 'Select a SNES ROM',
                     multiple: false,
                     filters: [{ name: 'SNES ROM', extensions: ['sfc', 'smc', 'nes'] }]
                 });
 
-                console.log("Dialog result:", romPath);
+                logToStatus(`Dialog result: ${romPath}`);
                 if (romPath) {
                     // Call the 'load_rom' command in the Rust backend
                     try {
-                        console.log(`Loading ROM from: ${romPath}`);
+                        logToStatus(`Loading ROM from: ${romPath}`);
                         await invoke('load_rom', { path: romPath });
-                        console.log(`ROM "${romPath}" loaded successfully.`);
-                        alert(`ROM loaded successfully!`);
+                        logToStatus(`ROM "${romPath}" loaded successfully!`);
                     } catch (e) {
-                        console.error(`Failed to invoke load_rom: ${e}`);
-                        alert(`Failed to load ROM: ${e}`);
+                        logToStatus(`ERROR: Failed to load ROM: ${e}`);
                     }
                 } else {
-                    console.log("No ROM selected (dialog cancelled)");
+                    logToStatus("ROM load cancelled by user");
                 }
             } catch (e) {
-                console.error(`File dialog error: ${e}`);
-                alert(`File dialog error: ${e}`);
+                logToStatus(`ERROR: File dialog error: ${e}`);
             }
         });
     } else {
-        console.error("Load ROM button not found in DOM!");
+        logToStatus("ERROR: Load ROM button not found in DOM!");
     }
 }
 
