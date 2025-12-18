@@ -20,6 +20,8 @@ pub struct EmuState {
     pub running: bool,
     pub total_cycles: u64,
     pub frame_count: u64,
+    pub instruction_count: u64,
+    pub last_logged_instruction: u64,
 }
 
 pub struct AppState {
@@ -120,6 +122,20 @@ fn get_audio(state: tauri::State<'_, AppState>) -> Vec<i16> {
     emu.bus.apu.get_audio_samples()
 }
 
+#[tauri::command]
+fn get_cpu_state(state: tauri::State<'_, AppState>) -> String {
+    let emu = state.emulator.lock().unwrap();
+    format!(
+        "PC=${:04X} A=${:04X} X=${:04X} Y=${:04X} P=${:02X} S=${:04X}",
+        emu.cpu.pc,
+        emu.cpu.a,
+        emu.cpu.x,
+        emu.cpu.y,
+        emu.cpu.p,
+        emu.cpu.s
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Create emulator state in a dedicated thread to avoid stack overflow
@@ -129,6 +145,8 @@ pub fn run() {
         running: false,
         total_cycles: 0,
         frame_count: 0,
+        instruction_count: 0,
+        last_logged_instruction: 0,
     }));
     
     let emu_arc_clone = Arc::clone(&emu_arc);
@@ -155,7 +173,25 @@ pub fn run() {
                                 unsafe {
                                     let cpu_ptr: *mut _65816 = &mut emu_guard.cpu;
                                     let bus_ptr: *mut Bus = &mut emu_guard.bus;
+                                    
+                                    // Log instruction every 100 instructions
+                                    if emu_guard.instruction_count % 100 == 0 && emu_guard.instruction_count > emu_guard.last_logged_instruction {
+                                        let cpu_state = &*cpu_ptr;
+                                        let opcode_msg = format!(
+                                            "[CPU] Instr #{}: PC=${:04X}, A=${:04X}, X=${:04X}, Y=${:04X}, P=${:02X}",
+                                            emu_guard.instruction_count,
+                                            cpu_state.pc,
+                                            cpu_state.a,
+                                            cpu_state.x,
+                                            cpu_state.y,
+                                            cpu_state.p
+                                        );
+                                        emit_log(&opcode_msg);
+                                        emu_guard.last_logged_instruction = emu_guard.instruction_count;
+                                    }
+                                    
                                     (*cpu_ptr).tick(&mut *bus_ptr);
+                                    emu_guard.instruction_count += 1;
                                 }
                             }
                             emu_guard.total_cycles += 88657;
@@ -191,7 +227,8 @@ pub fn run() {
             press_button, 
             release_button,
             save_sram,
-            get_audio
+            get_audio,
+            get_cpu_state
         ])
         .build(tauri::generate_context!()) {
             Ok(app) => {

@@ -1025,6 +1025,342 @@ impl APU {
                 self.spc700.pc = self.spc700.pc.wrapping_add(1);
             }
             
+            // ============== ADDITIONAL BOOTLOADER OPCODES ==============
+            
+            // ASL A - arithmetic shift left - 0x1C
+            0x1C => {
+                self.spc700.c = (self.spc700.a & 0x80) != 0;
+                self.spc700.a <<= 1;
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // LSR A - logical shift right - 0x5C
+            0x5C => {
+                self.spc700.c = (self.spc700.a & 0x01) != 0;
+                self.spc700.a >>= 1;
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // ROL A - rotate left - 0x3C
+            0x3C => {
+                let carry = if self.spc700.c { 1 } else { 0 };
+                self.spc700.c = (self.spc700.a & 0x80) != 0;
+                self.spc700.a = (self.spc700.a << 1) | carry;
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // ROR A - rotate right - 0x7C
+            0x7C => {
+                let carry = if self.spc700.c { 1 } else { 0 };
+                self.spc700.c = (self.spc700.a & 0x01) != 0;
+                self.spc700.a = (self.spc700.a >> 1) | (carry << 7);
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // DEC Y - 0xDC
+            0xDC => {
+                self.spc700.y = self.spc700.y.wrapping_sub(1);
+                self.update_nz(self.spc700.y);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // INC $addr - increment direct address - 0xAB
+            0xAB => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = self.ram[self.spc700.pc as usize] as u16;
+                let val = self.ram[addr as usize].wrapping_add(1);
+                self.ram[addr as usize] = val;
+                self.update_nz(val);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // DEC $addr - decrement direct address - 0x8B
+            0x8B => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = self.ram[self.spc700.pc as usize] as u16;
+                let val = self.ram[addr as usize].wrapping_sub(1);
+                self.ram[addr as usize] = val;
+                self.update_nz(val);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV A, (X)+ - indirect with post-increment X - 0xAF
+            0xAF => {
+                let addr = self.spc700.x as u16;
+                self.spc700.a = self.ram[addr as usize];
+                self.spc700.x = self.spc700.x.wrapping_add(1);
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV (X)+, A - indirect with post-increment X store - 0xBF
+            0xBF => {
+                let addr = self.spc700.x as u16;
+                self.ram[addr as usize] = self.spc700.a;
+                self.spc700.x = self.spc700.x.wrapping_add(1);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // CBNE $addr, label - compare and branch if not equal - 0x2E
+            0x2E => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = self.ram[self.spc700.pc as usize] as u16;
+                let val = self.ram[addr as usize];
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let offset = self.ram[self.spc700.pc as usize] as i8 as i16;
+                if val != self.spc700.a {
+                    self.spc700.pc = (self.spc700.pc as i16).wrapping_add(offset + 1) as u16;
+                } else {
+                    self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                }
+            }
+            
+            // DBNZ $addr, label - decrement and branch if not zero - 0x6E
+            0x6E => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = self.ram[self.spc700.pc as usize] as u16;
+                let val = self.ram[addr as usize].wrapping_sub(1);
+                self.ram[addr as usize] = val;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let offset = self.ram[self.spc700.pc as usize] as i8 as i16;
+                if val != 0 {
+                    self.spc700.pc = (self.spc700.pc as i16).wrapping_add(offset + 1) as u16;
+                } else {
+                    self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                }
+            }
+            
+            // DBNZ Y, label - decrement Y and branch if not zero - 0xFE
+            0xFE => {
+                self.spc700.y = self.spc700.y.wrapping_sub(1);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let offset = self.ram[self.spc700.pc as usize] as i8 as i16;
+                if self.spc700.y != 0 {
+                    self.spc700.pc = (self.spc700.pc as i16).wrapping_add(offset + 1) as u16;
+                } else {
+                    self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                }
+            }
+            
+            // TCLR1 $addr - test and clear bits - 0x4E
+            0x4E => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = self.ram[self.spc700.pc as usize] as u16;
+                let val = self.ram[addr as usize];
+                self.update_nz(val & !self.spc700.a);
+                self.ram[addr as usize] = val & !self.spc700.a;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // TSET1 $addr - test and set bits - 0xCE
+            0xCE => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = self.ram[self.spc700.pc as usize] as u16;
+                let val = self.ram[addr as usize];
+                self.update_nz(val | self.spc700.a);
+                self.ram[addr as usize] = val | self.spc700.a;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV $addr1, $addr2 - move between two direct addresses - 0xFA
+            0xFA => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr1 = self.ram[self.spc700.pc as usize] as u16;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr2 = self.ram[self.spc700.pc as usize] as u16;
+                let val = self.ram[addr1 as usize];
+                self.ram[addr2 as usize] = val;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // CMP X, #imm - 0x1E
+            0x1E => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let imm = self.ram[self.spc700.pc as usize];
+                let result = (self.spc700.x as i16) - (imm as i16);
+                self.spc700.c = result >= 0;
+                self.update_nz(result as u8);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // CMP Y, #imm - 0x5E
+            0x5E => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let imm = self.ram[self.spc700.pc as usize];
+                let result = (self.spc700.y as i16) - (imm as i16);
+                self.spc700.c = result >= 0;
+                self.update_nz(result as u8);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MUL YA - multiply Y and A, result in YA - 0xCF
+            0x9E => {
+                let result = (self.spc700.a as u16) * (self.spc700.y as u16);
+                self.spc700.a = (result & 0xFF) as u8;
+                self.spc700.y = (result >> 8) as u8;
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // DIV YA, X - divide YA by X - 0x9F
+            0x9F => {
+                if self.spc700.x != 0 {
+                    let dividend = ((self.spc700.y as u16) << 8) | (self.spc700.a as u16);
+                    self.spc700.a = (dividend / self.spc700.x as u16) as u8;
+                    self.spc700.y = (dividend % self.spc700.x as u16) as u8;
+                }
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // BIT #imm - 0xE9
+            0xE9 => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let imm = self.ram[self.spc700.pc as usize];
+                let result = self.spc700.a & imm;
+                self.update_nz(result);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // SET1 $addr.bit - set bit - 0x02, 0x22, 0x42, 0x62, 0x82, 0xA2, 0xC2, 0xE2
+            0x02 | 0x22 | 0x42 | 0x62 | 0x82 | 0xA2 | 0xC2 | 0xE2 => {
+                let bit = (opcode >> 5) & 0x07;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = self.ram[self.spc700.pc as usize] as u16;
+                let val = self.ram[addr as usize] | (1 << bit);
+                self.ram[addr as usize] = val;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // CLR1 $addr.bit - clear bit - 0x12, 0x32, 0x52, 0x72, 0x92, 0xB2, 0xD2, 0xF2
+            0x12 | 0x32 | 0x52 | 0x72 | 0x92 | 0xB2 | 0xD2 | 0xF2 => {
+                let bit = (opcode >> 5) & 0x07;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = self.ram[self.spc700.pc as usize] as u16;
+                let val = self.ram[addr as usize] & !(1 << bit);
+                self.ram[addr as usize] = val;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // NOTC - complement carry flag - 0xED
+            0xED => {
+                self.spc700.c = !self.spc700.c;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // CLRC - clear carry flag - 0x60
+            0x60 => {
+                self.spc700.c = false;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // SETC - set carry flag - 0x80
+            0x80 => {
+                self.spc700.c = true;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // CLRV - clear overflow - 0xE0
+            0xE0 => {
+                self.spc700.v = false;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // CLRD - clear direct page flag - 0x00
+            0x00 => {
+                self.spc700.p = false;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // SETD - set direct page flag - 0x20
+            0x20 => {
+                self.spc700.p = true;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV A, [($nn)+Y] - indexed indirect Y - 0xB7
+            0xB7 => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr_ptr = self.ram[self.spc700.pc as usize] as u16;
+                let low = self.ram[addr_ptr as usize] as u16;
+                let high = self.ram[(addr_ptr + 1) as usize] as u16;
+                let addr = (high << 8) | low;
+                self.spc700.a = self.ram[(addr + self.spc700.y as u16) as usize];
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV [($nn)+Y], A - indexed indirect Y store - 0xA7
+            0xA7 => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr_ptr = self.ram[self.spc700.pc as usize] as u16;
+                let low = self.ram[addr_ptr as usize] as u16;
+                let high = self.ram[(addr_ptr + 1) as usize] as u16;
+                let addr = (high << 8) | low;
+                self.ram[(addr + self.spc700.y as u16) as usize] = self.spc700.a;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV A, [$nn + X] - indexed indirect X - 0x97
+            0x97 => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr_ptr = self.ram[self.spc700.pc as usize] as u16;
+                let low = self.ram[addr_ptr as usize] as u16;
+                let high = self.ram[(addr_ptr + 1) as usize] as u16;
+                let addr = (high << 8) | low;
+                self.spc700.a = self.ram[(addr + self.spc700.x as u16) as usize];
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV [$nn + X], A - indexed indirect X store - 0x87
+            0x87 => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr_ptr = self.ram[self.spc700.pc as usize] as u16;
+                let low = self.ram[addr_ptr as usize] as u16;
+                let high = self.ram[(addr_ptr + 1) as usize] as u16;
+                let addr = (high << 8) | low;
+                self.ram[(addr + self.spc700.x as u16) as usize] = self.spc700.a;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV A, $addr+X - direct indexed X - 0xF5
+            0xF5 => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = (self.ram[self.spc700.pc as usize] as u16).wrapping_add(self.spc700.x as u16);
+                self.spc700.a = self.ram[addr as usize];
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV A, $addr+Y - direct indexed Y - 0xF6
+            0xF6 => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = (self.ram[self.spc700.pc as usize] as u16).wrapping_add(self.spc700.y as u16);
+                self.spc700.a = self.ram[addr as usize];
+                self.update_nz(self.spc700.a);
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV $addr+X, A - direct indexed X store - 0xD5
+            0xD5 => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = (self.ram[self.spc700.pc as usize] as u16).wrapping_add(self.spc700.x as u16);
+                self.ram[addr as usize] = self.spc700.a;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
+            // MOV $addr+Y, A - direct indexed Y store - 0xD6
+            0xD6 => {
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+                let addr = (self.ram[self.spc700.pc as usize] as u16).wrapping_add(self.spc700.y as u16);
+                self.ram[addr as usize] = self.spc700.a;
+                self.spc700.pc = self.spc700.pc.wrapping_add(1);
+            }
+            
             // Unknown opcode - skip
             _ => {
                 self.spc700.pc = self.spc700.pc.wrapping_add(1);

@@ -116,6 +116,11 @@ async function initApp() {
     // Listen for log messages from the backend
     listen('log-message', (event) => {
         logToStatus(event.payload);
+        
+        // If this is a CPU instruction log, also add to opcodes display
+        if (event.payload.includes('[CPU]')) {
+            logOpcodes(event.payload);
+        }
     });
 
     // Keymap: keyboard key -> SNES button bit
