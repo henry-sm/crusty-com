@@ -62,10 +62,10 @@ pub struct BGOffset {
 }
 
 pub struct PPU {
-    // Video Memory
-    pub vram: [u8; 65536],          // Video RAM (64KB)
-    pub oam: [u8; 544],              // Object Attribute Memory (544 bytes)
-    pub cgram: [u8; 512],            // Color Generator RAM (512 bytes, 256 colors)
+    // Video Memory (heap-allocated to avoid stack overflow)
+    pub vram: Box<[u8; 65536]>,     // Video RAM (64KB)
+    pub oam: Box<[u8; 544]>,        // Object Attribute Memory (544 bytes)
+    pub cgram: Box<[u8; 512]>,      // Color Generator RAM (512 bytes, 256 colors)
     
     // PPU Control Registers
     pub control: PPUControl,
@@ -98,10 +98,10 @@ pub struct PPU {
 
 impl PPU {
     pub fn new() -> Self {
-        PPU {
-            vram: [0; 65536],
-            oam: [0; 544],
-            cgram: [0; 512],
+        let mut ppu = PPU {
+            vram: Box::new([0; 65536]),
+            oam: Box::new([0; 544]),
+            cgram: Box::new([0; 512]),
             
             control: PPUControl {
                 forced_blank: false,  // Enable display rendering
@@ -138,7 +138,95 @@ impl PPU {
             
             temp_x: 0,
             temp_y: 0,
+        };
+        
+        // Initialize default palette for debugging (standard SNES colors)
+        // CGRAM is 512 bytes = 256 colors, each 2 bytes (555-RGB)
+        ppu.init_default_palette();
+        
+        // Initialize simple test pattern in VRAM
+        ppu.init_test_pattern();
+        
+        ppu
+    }
+    
+    /// Initialize default palette with common colors for debugging
+    fn init_default_palette(&mut self) {
+        // Standard 16-color palette (Mode 0 friendly)
+        let palette_555: &[u16] = &[
+            0x0000, // 0: Black
+            0x001F, // 1: Red
+            0x03E0, // 2: Green
+            0x03FF, // 3: Yellow (Red + Green)
+            0x7C00, // 4: Blue
+            0x7C1F, // 5: Magenta (Red + Blue)
+            0x7FE0, // 6: Cyan (Green + Blue)
+            0x7FFF, // 7: White
+            0x4208, // 8: Dark Gray
+            0x5294, // 9: Light Red
+            0x52E4, // 10: Light Green
+            0x56B5, // 11: Light Cyan
+            0x4A29, // 12: Purple
+            0x4A52, // 13: Light Purple
+            0x4E6B, // 14: Pink
+            0x5294, // 15: Light Gray
+        ];
+        
+        // Fill CGRAM with palette (repeat pattern for all 256 colors)
+        for i in 0..256 {
+            let color_555 = palette_555[i % palette_555.len()];
+            let addr = i * 2;
+            self.cgram[addr] = color_555 as u8;
+            self.cgram[addr + 1] = (color_555 >> 8) as u8;
         }
+    }
+    
+    /// Initialize simple test pattern in VRAM (simple tiles for debugging)
+    fn init_test_pattern(&mut self) {
+        // Create a simple 2bpp tile pattern
+        // Tile 0 at VRAM 0x0000: 8x8 checker pattern
+        // Each row of 8 pixels in 2bpp = 2 bytes (4 pixels per byte)
+        // 8 rows × 2 bytes = 16 bytes per tile
+        
+        // Pattern: checker with colors 0, 1, 2, 3
+        let checker_pattern: &[u8] = &[
+            0xAA, 0x55,  // Row 0: 10 10 10 10 / 01 01 01 01 = alternating
+            0x55, 0xAA,  // Row 1: 01 01 01 01 / 10 10 10 10
+            0xAA, 0x55,  // Row 2
+            0x55, 0xAA,  // Row 3
+            0xAA, 0x55,  // Row 4
+            0x55, 0xAA,  // Row 5
+            0xAA, 0x55,  // Row 6
+            0x55, 0xAA,  // Row 7
+        ];
+        
+        // Fill first 16 tiles with pattern (16 bytes × 16 tiles = 256 bytes)
+        for tile in 0..16 {
+            let tile_addr = tile * 16;
+            for (i, &byte) in checker_pattern.iter().enumerate() {
+                self.vram[tile_addr + i] = byte;
+            }
+        }
+        
+        // Fill tile map with tile numbers (map is at address 0x4000 in mode 0)
+        // Each tile map entry is 2 bytes: [low_byte, high_byte]
+        // Bits: low_byte = tile number bits 0-7
+        //       high_byte = tile_num bits 8-9, palette bits 2-4, h-flip bit 6, v-flip bit 7
+        let map_addr = 0x4000;
+        for y in 0..32 {
+            for x in 0..32 {
+                let map_offset = (y * 32 + x) * 2;
+                let tile_num = ((y + x) % 16) as u8;  // Tile pattern
+                let palette = ((x / 4) % 4) as u8;     // Different palette per 4 tiles
+                
+                self.vram[map_addr + map_offset] = tile_num;
+                self.vram[map_addr + map_offset + 1] = palette << 2;  // Palette in bits 2-4
+            }
+        }
+        
+        // Set up BG0 to use this map and tiles
+        self.bg_control[0].tile_addr = 0x0000;  // Tiles at 0x0000
+        self.bg_control[0].map_addr = 0x4000;   // Map at 0x4000
     }
     
     // --- VRAM Access ---
@@ -651,9 +739,19 @@ impl PPU {
     ///    - SOURCE: SNES hardware behavior documentation
     pub fn render_scanline(&mut self) {
         if self.control.forced_blank || self.scanline >= 224 {
-            // Blank scanline
+            // Blank scanline - render backcolor (palette entry 0)
+            let backcolor_addr = 0;  // First palette entry is background color
+            let lo = self.cgram[backcolor_addr] as u16;
+            let hi = self.cgram[backcolor_addr + 1] as u16;
+            let color555 = (hi << 8) | lo;
+            // Convert 15-bit RGB to 32-bit ARGB
+            let r = ((color555 & 0x1F) << 3) as u32;
+            let g = (((color555 >> 5) & 0x1F) << 3) as u32;
+            let b = (((color555 >> 10) & 0x1F) << 3) as u32;
+            let color = 0xFF000000 | (b << 16) | (g << 8) | r;
+            
             for x in 0..256 {
-                self.framebuffer[(self.scanline as usize * 256) + x] = 0xFF000000; // Black
+                self.framebuffer[(self.scanline as usize * 256) + x] = color;
             }
             return;
         }
@@ -668,7 +766,7 @@ impl PPU {
                 for x in 0..256 {
                     let (color_index, _) = self.get_bg_pixel(0, x as u16, y as u16);
                     // Read color from CGRAM (palette RAM)
-                    let color_addr = (color_index as usize * 2) & 0x1FF;
+                    let color_addr = (color_index as usize * 2) & 0x1FE;  // Ensure even address
                     let lo = self.cgram[color_addr] as u16;
                     let hi = self.cgram[color_addr + 1] as u16;
                     let color555 = (hi << 8) | lo;
@@ -681,7 +779,7 @@ impl PPU {
                 }
             }
             _ => {
-                // For other modes, render solid color based on mode
+                // For other modes, render solid color based on mode for debugging
                 let color = match self.bg_mode {
                     1 => 0xFF0000FF, // Red
                     2 => 0xFF00FF00, // Green
