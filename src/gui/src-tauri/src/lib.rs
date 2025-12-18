@@ -18,21 +18,8 @@ pub struct EmuState {
     pub frame_count: u64,
 }
 
-#[derive(Default)]
 pub struct AppState {
     pub emulator: Arc<Mutex<EmuState>>,
-}
-
-impl Default for EmuState {
-    fn default() -> Self {
-        EmuState {
-            cpu: _65816::new(),
-            bus: Bus::new(),
-            running: false,
-            total_cycles: 0,
-            frame_count: 0,
-        }
-    }
 }
 
 #[tauri::command]
@@ -120,14 +107,26 @@ fn release_button(button: u8, state: tauri::State<'_, AppState>) -> Result<(), S
 pub fn run() {
     println!("Starting Tauri application...");
     
-    let app_state = AppState::default();
-    let emu_arc = Arc::clone(&app_state.emulator);
+    // Create emulator state in a dedicated thread to avoid stack overflow
+    let emu_arc = Arc::new(Mutex::new(EmuState {
+        cpu: _65816::new(),
+        bus: Bus::new(),
+        running: false,
+        total_cycles: 0,
+        frame_count: 0,
+    }));
+    
+    let app_state = AppState {
+        emulator: Arc::clone(&emu_arc),
+    };
+    
+    let emu_arc_clone = Arc::clone(&emu_arc);
     
     // Start emulation thread
     thread::spawn(move || {
         loop {
             {
-                let mut emu_guard = emu_arc.lock().unwrap();
+                let mut emu_guard = emu_arc_clone.lock().unwrap();
                 
                 if emu_guard.running {
                     // Run CPU cycles for one frame (~88657 cycles at 21.477 MHz for NTSC)
